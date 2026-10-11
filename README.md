@@ -17,7 +17,7 @@ This is your team's repository for the four-week physical AI hackathon run by Ro
 
 ## First week
 
-- [ ] Everyone on the team has an ALL AI Network account and has joined this team in the [workspace](https://dashboard.all-ai-network.org/j/L36HEH).
+- [x] Everyone on the team has an ALL AI Network account and has joined this team in the [workspace](https://dashboard.all-ai-network.org/j/L36HEH).
 - [ ] Everyone has connected GitHub and accepted the repository invitation (check your GitHub email, or open the workspace and press the check button).
 - [ ] Pick your dataset. We recommend one strong solution around a single dataset.
 - [ ] Download the data and make sure everyone who needs it can open it.
