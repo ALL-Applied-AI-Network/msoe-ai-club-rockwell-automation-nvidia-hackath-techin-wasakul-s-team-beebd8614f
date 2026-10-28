@@ -1,0 +1,30 @@
+# Big data and generated output
+data/
+results/
+digital_twin/
+*.zip
+
+# USD files from the digital twin
+*.usd
+*.usda
+*.usdc
+
+# Secrets: never commit these
+.env
+*.pem
+id_ed25519*
+
+# Python junk
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Mac junk
+.DS_Store
+
+# Model weights (stored on Hugging Face instead)
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+*.onnx
