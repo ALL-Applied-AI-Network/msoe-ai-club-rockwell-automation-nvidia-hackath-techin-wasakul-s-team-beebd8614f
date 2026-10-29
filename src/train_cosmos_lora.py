@@ -37,7 +37,7 @@ RECIPES = {
     11: {100: 10, 200: 10, 400: 50}, 12: {100: 10, 200: 50, 400: 10},
     13: {200: 50, 400: 20},         14: {100: 60, 400: 10},
 }
-TANK = {100: "T-100 clear", 200: "T-200 orange", 400: "T-400 blue"}
+TANK = {100: "Tank 100", 200: "Tank 200", 400: "Tank 400"}
 ORDER = [200, 400, 100]  # fixed dispense order
 
 
@@ -50,20 +50,41 @@ def build_example(r):
     rid = int(r["recipe_id"])
     prev = int(r.get("prev_recipe_id") or 0)
     k = int(r.get("vial_in_batch") or 0)
-    prev_txt = describe(prev) if prev in RECIPES else "none (first fill of the run)"
-    prompt = (f"Current {describe(rid)}. Previous {prev_txt}. "
-              f"This is vial {k} of the batch. Does the liquid color match the current recipe? "
-              f"If not, explain the likely cause.")
+    prev_txt = describe(prev) if prev in RECIPES else "none (start of production run)"
+    
+    prompt = (
+        f"Station 3 Inspection. Current {describe(rid)}. Previous {prev_txt}. "
+        f"This is vial {k} of the batch. Inspect the vial image: Does the liquid match "
+        f"Recipe {rid}? If contaminated, output machine control action STOP_MACHINE, identify "
+        f"the vial, and detail the chemical root cause from the previous recipe."
+    )
+    
     if int(r.get("contaminated") or 0) and prev in RECIPES:
         obs = (r.get("observed_color") or "discolored").strip()
-        answer = (f"No. The liquid looks {obs}, not the expected color for Recipe {rid}. "
-                  f"Likely carryover from Recipe {prev}, which dispensed "
-                  f"{describe(prev).split(': ', 1)[1]}. Its residue stayed in the shared "
-                  f"mixing path and entered the first vial of the new batch.")
+        # Find which tank ingredients in prev recipe caused the issue
+        prev_tanks = [TANK[t] for t in ORDER if t in RECIPES[prev] and t != 100]
+        curr_tanks = [TANK[t] for t in ORDER if t in RECIPES[rid] and t != 100]
+        
+        answer = (
+            f"[ACTION: STOP_MACHINE]\n"
+            f"ERROR: Fluid Contamination Detected.\n"
+            f"- Recipe Being Filled: Recipe {rid} ({describe(rid).split(': ', 1)[1]})\n"
+            f"- Batch Position: Vial {k} of 3\n"
+            f"- Observed Appearance: {obs} (MISMATCH: does not match standard Recipe {rid})\n"
+            f"- Root Cause: Carryover from previous Recipe {prev} ({describe(prev).split(': ', 1)[1]}). "
+            f"Residual fluid from {', '.join(prev_tanks)} remained in the shared dispensing nozzle/manifold "
+            f"and cross-contaminated the incoming fluid from {', '.join(curr_tanks)}.\n"
+            f"- Machine Directive: Line halted. Initiate nozzle flush cycle before resuming."
+        )
     else:
-        answer = f"Yes. The liquid color matches Recipe {rid}. No sign of carryover."
+        answer = (
+            f"[ACTION: CONTINUE]\n"
+            f"STATUS: Normal.\n"
+            f"- Recipe Being Filled: Recipe {rid}\n"
+            f"- Batch Position: Vial {k} of 3\n"
+            f"- Verification: Liquid color matches Recipe {rid} specification. No carryover detected."
+        )
     return prompt, answer
-
 
 def load_rows(path):
     if path.endswith(".jsonl"):

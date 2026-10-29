@@ -127,8 +127,9 @@ def test_training_script(path):
         print("   ", e)
     check("her build_example() accepts every row of our labels", ok, f"{len(rows)} rows")
     if ok:
-        check("contaminated rows get a 'carryover' answer, clean rows a 'Yes' answer", all(
-            ("carryover from Recipe" in a) == bool(int(r["contaminated"])) and a.startswith("Yes") != bool(int(r["contaminated"]))
+        check("contaminated rows trigger STOP_MACHINE, clean rows trigger CONTINUE", all(
+            (("STOP_MACHINE" in a or "carryover from Recipe" in a.lower()) == bool(int(r["contaminated"]))) and
+            (("CONTINUE" in a or a.startswith("Yes")) != bool(int(r["contaminated"])))
             for r, (_, a) in zip(rows, pairs)))
 
 
