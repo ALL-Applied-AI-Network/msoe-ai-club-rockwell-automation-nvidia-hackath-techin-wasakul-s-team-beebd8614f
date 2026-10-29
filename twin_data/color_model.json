@@ -1,0 +1,41 @@
+{
+ "k": [
+  [
+   1.3332,
+   1.5699,
+   2.9855
+  ],
+  [
+   -0.8894,
+   2.8181,
+   2.9625
+  ],
+  [
+   7.5434,
+   0.9629,
+   -2.4204
+  ]
+ ],
+ "empty_vial_linear": [
+  0.07809,
+  0.08206,
+  0.05105
+ ],
+ "twin_strength": 1.0,
+ "carryover_alpha_real": [
+  0.99,
+  0.39,
+  0.44,
+  0.26,
+  1.0,
+  0.53,
+  0.48,
+  1.0,
+  0.7
+ ],
+ "carryover_alpha_range": [
+  0.26,
+  1.0
+ ],
+ "note": "fitted by calibrate_colors.py from video 5 (k rows: base, orange, blue; cols R,G,B)"
+}
