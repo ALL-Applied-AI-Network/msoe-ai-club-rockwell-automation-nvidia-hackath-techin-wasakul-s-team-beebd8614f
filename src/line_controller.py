@@ -44,6 +44,10 @@ HF_ADAPTER_SUBFOLDER = "original_v2"
 HF_BASE_ID = "PourSightAI/CosmosReason3Hackathon"
 HF_BASE_SUBFOLDER = "cosmos3-nano"
 
+# The v2 adapter assesses vial 1 only after vial 2 and vial 3 have arrived.
+# This is a two-capture inference delay, not a delay in saving camera frames.
+V2_TARGET_DELAY_IMAGES = 2
+
 CONTAMINATION_SYSTEM_PROMPT = """You assess possible liquid carryover in an industrial vial-filling process.
 You receive chronological visual history followed by images from a current
 recipe batch. Assess ONLY the first vial in the current batch. The other current
@@ -360,13 +364,16 @@ class LineController:
         self.image_history.append(image_path)
         self.vial_position_history.append(vial_in_batch)
 
-        # The first two images of the current batch are buffered as reference
-        # evidence. Classification becomes valid only after vial 3 arrives.
-        if vial_in_batch != 3:
+        # Delay the AI assessment of vial 1 until exactly two following images
+        # (vials 2 and 3) are available as same-recipe reference evidence.
+        if vial_in_batch <= V2_TARGET_DELAY_IMAGES:
+            following_images_seen = max(0, vial_in_batch - 1)
+            remaining = V2_TARGET_DELAY_IMAGES - following_images_seen
             return "CONTINUE", (
                 "[REPORT: CONTINUE]\n"
                 f"STATUS: Camera image buffered ({len(self.image_history)}/12); "
-                "awaiting the complete three-vial batch for v2 inspection."
+                f"vial 1 assessment delayed until {remaining} more following "
+                f"reference image{'s' if remaining != 1 else ''} arrive."
             )
 
         expected_positions = [1, 2, 3] * 4
@@ -701,4 +708,5 @@ if __name__ == "__main__":
             simulate_production_run(default_plan, mock=True)
         else:
             ap.print_help()
+
 
