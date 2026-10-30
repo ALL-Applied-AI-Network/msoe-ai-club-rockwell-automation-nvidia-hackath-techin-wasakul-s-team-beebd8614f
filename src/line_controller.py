@@ -158,6 +158,9 @@ class LineController:
         self.mock = mock
         self.model = None
         self.processor = None
+        # Most recent completed assessment for a future UI. Contamination
+        # reports include the exact vial image that was assessed.
+        self.last_report = None
         # The v2 model contract is exactly 12 chronological images:
         # 9 earlier images followed by all 3 images in the current batch.
         self.image_history = deque(maxlen=12)
@@ -321,6 +324,8 @@ class LineController:
         Returns an advisory action ('REPORT_ATTENTION' or 'CONTINUE') and an
         operator-safe diagnostic. Invalid model output requests operator review.
         """
+        self.last_report = None
+
         if self.mock or self.model is None:
             # Emulate inference using row metadata or clean rules
             is_contaminated = bool(row_data and int(row_data.get("contaminated", 0)))
@@ -348,6 +353,13 @@ class LineController:
                     f"- Verification: Liquid color matches Recipe {recipe_id} specification. No carryover detected."
                 )
             action = "REPORT_ATTENTION" if is_contaminated else "CONTINUE"
+            if is_contaminated:
+                self.last_report = {
+                    "type": "contamination",
+                    "image_path": image_path,
+                    "assessment": "potential_carryover",
+                    "text": text,
+                }
             return action, text
 
         # Real GPU multimodal VLM execution. The v2 adapter was not trained for
@@ -393,7 +405,11 @@ class LineController:
             )
             return "REPORT_ATTENTION", text
 
-        assessment, raw_output = self._run_v2_inference(list(self.image_history))
+        assessment_images = list(self.image_history)
+        # Inference happens on vial 3. The assessed vial is therefore the
+        # image captured two vials earlier: vial 1 at index -3.
+        assessed_image_path = assessment_images[-(V2_TARGET_DELAY_IMAGES + 1)]
+        assessment, raw_output = self._run_v2_inference(assessment_images)
         if assessment == "potential_carryover":
             prev_description = (
                 describe(prev_recipe_id)
@@ -412,6 +428,12 @@ class LineController:
                 "- Operator Recommendation: Pause the line and flush the nozzle before continuing.\n"
                 f"- AI Assessment: {raw_output}"
             )
+            self.last_report = {
+                "type": "contamination",
+                "image_path": assessed_image_path,
+                "assessment": assessment,
+                "text": text,
+            }
             return "REPORT_ATTENTION", text
 
         if assessment == "no_clear_carryover_signal":
@@ -423,6 +445,12 @@ class LineController:
                 "reference evidence.\n"
                 f"- AI Assessment: {raw_output}"
             )
+            self.last_report = {
+                "type": "clear",
+                "image_path": assessed_image_path,
+                "assessment": assessment,
+                "text": text,
+            }
             return "CONTINUE", text
 
         # Reporting policy: output outside the trained JSON contract is not
@@ -434,6 +462,12 @@ class LineController:
             "- Operator Recommendation: Pause operation, manually inspect the batch, and flush "
             "the nozzle before continuing."
         )
+        self.last_report = {
+            "type": "inspection_error",
+            "image_path": assessed_image_path,
+            "assessment": assessment,
+            "text": text,
+        }
         return "REPORT_ATTENTION", text
 
     def process_vial(self, image_path, recipe_id, prev_recipe_id, vial_in_batch,
@@ -457,7 +491,11 @@ class LineController:
         )
 
         if action == "REPORT_ATTENTION":
-            self._print_contamination_report(diagnostic)
+            report_image = (
+                self.last_report.get("image_path", "")
+                if self.last_report else ""
+            )
+            self._print_contamination_report(diagnostic, report_image)
             return "CONTAMINATION_REPORTED"
 
         for line in diagnostic.strip().split("\n"):
@@ -465,13 +503,15 @@ class LineController:
         return "CONTINUE"
 
     @staticmethod
-    def _print_contamination_report(diagnostic):
+    def _print_contamination_report(diagnostic, image_path=""):
         print("\n" + "=" * 76)
         print("  ⚠️  [CONTAMINATION DETECTION REPORT] OPERATOR ATTENTION REQUIRED ⚠️")
         print("=" * 76)
         for line in diagnostic.strip().split("\n"):
             print(f"  {line}")
         print("-" * 76)
+        if image_path:
+            print(f"  [REPORT IMAGE] {image_path}")
         print("  OUTPUT MODE: Advisory report only; no machine-control command was issued.")
         print("=" * 76 + "\n")
 
