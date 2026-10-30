@@ -17,14 +17,14 @@ Usage:
   # 2. Predictive pre-fill prevention mode:
   python3 src/line_controller.py --plan twin_data/demo_out/plan.csv --mock --predictive
 
-  # 2b. REAL TRAINED MODEL, adapter pulled from Hugging Face (needs GPU + torch/transformers/peft):
+  # 2b. REAL v2 TRAINED MODEL, adapter pulled from Hugging Face
+  #     (needs GPU + torch/transformers/peft and 12 chronological images):
   python3 src/line_controller.py --plan twin_data/demo_out/plan.csv --img-root <folder with images> \
-      --hf-adapter run-01
+      --hf-adapter original_v2
 
   # 3. PHYSICAL CSI LINE (EtherNet/IP to Rockwell PLC):
   python3 src/line_controller.py --plc-ip 192.168.1.10 --plc-slot 0 --live \
-      --image-dir /path/to/camera_inbox --base /workspace/models/cosmos-reason \
-      --adapter /workspace/models/run-01
+      --image-dir /path/to/camera_inbox --hf-adapter original_v2
 """
 
 import argparse
@@ -32,16 +32,46 @@ import csv
 import json
 import math
 import os
+import re
 import sys
 import time
+from collections import deque
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
 
-# Where the trained LoRA adapters live (see models/README.md). Each training run is
-# uploaded to adapters/<run-name>/ and the learned weights are adapter_model.safetensors.
-HF_REPO = "PourSightAI/CosmosReason3Hackathon"
-HF_BASE_ID = "nvidia/Cosmos-Reason1-7B"
+# Cosmos 3 Nano base and the v2 contamination adapter produced by
+# train_cosmos3_vial_lora_v2.py.  The adapter repository is separate from the
+# base-model repository and must contain adapter_config.json beside the weights.
+HF_REPO = "PourSightAI/Cosmos3-Vial-Contamination-LoRA"
+HF_ADAPTER_SUBFOLDER = "original_v2"
+HF_BASE_ID = "PourSightAI/CosmosReason3Hackathon"
+HF_BASE_SUBFOLDER = "cosmos3-nano"
+
+CONTAMINATION_SYSTEM_PROMPT = """You assess possible liquid carryover in an industrial vial-filling process.
+You receive chronological visual history followed by images from a current
+recipe batch. Assess ONLY the first vial in the current batch. The other current
+batch images are reference evidence, not additional contamination targets.
+
+Do not assume a recipe identity, expected color, tank identity, ingredient,
+dispense order, or exact liquid volume. Do not infer hidden simulator metadata.
+Recipes can legitimately differ and can share colors or ingredients. Compare
+large color differences carefully. When colors are similar, apparent fill-level
+differences become especially useful; do not let small fill differences outweigh
+a large clear color difference. A small approximately constant pipe residual may
+have a greater proportional effect in a smaller-volume recipe.
+
+The first vial is a useful carryover candidate, not automatically contaminated.
+Compare it with the earlier visual history and with both later current-batch vials.
+Agreement between the later two alone does not clear vial 1: vial 1 itself must
+visually match both in color and fill level before that evidence can refute suspicion.
+Focus on strong visual evidence; ambiguous cases should remain uncertain.
+
+Return only this JSON object, with no markdown:
+{\"assessment\":\"potential_carryover\"}
+or
+{\"assessment\":\"no_clear_carryover_signal\"}
+"""
 
 # Attempt EtherNet/IP driver import (pylogix)
 try:
@@ -73,29 +103,35 @@ EMPTY_VIAL_LINEAR = [0.07809, 0.08206, 0.05105]
 def resolve_adapter(adapter_path="", hf_adapter="", hf_repo=HF_REPO, cache_dir=None):
     """
     Returns a LOCAL folder containing adapter_model.safetensors + adapter_config.json.
-      - hf_adapter: run name, e.g. "run-01". Downloads adapters/<run>/ from the Hugging Face
-        repo (uses HF_TOKEN from the environment if the repo is private).
+      - hf_adapter: repository subfolder, normally "original_v2". Downloads that
+        folder from the Hugging Face repo (uses HF_TOKEN if the repo is private).
       - adapter_path: an already-local adapter folder.
     Raises (never silently falls back to the untrained base model).
     """
     if hf_adapter:
         from huggingface_hub import snapshot_download
-        run = hf_adapter.strip("/").split("/")[-1]
-        print(f"[INIT] Downloading adapter 'adapters/{run}' from Hugging Face repo {hf_repo}...")
+        subfolder = hf_adapter.strip("/")
+        print(f"[INIT] Downloading adapter '{subfolder}' from Hugging Face repo {hf_repo}...")
         root = snapshot_download(
             repo_id=hf_repo,
-            allow_patterns=[f"adapters/{run}/*"],
+            allow_patterns=[f"{subfolder}/*"],
             cache_dir=cache_dir,
             token=os.environ.get("HF_TOKEN") or None,
         )
-        adapter_path = os.path.join(root, "adapters", run)
+        adapter_path = os.path.join(root, subfolder)
     if not adapter_path:
         return ""
     weights = os.path.join(adapter_path, "adapter_model.safetensors")
+    config = os.path.join(adapter_path, "adapter_config.json")
     if not os.path.isfile(weights):
         raise FileNotFoundError(
-            f"No adapter_model.safetensors in '{adapter_path}'. Check the run name / path "
-            f"(expected adapters/<run-name>/ in {hf_repo})."
+            f"No adapter_model.safetensors in '{adapter_path}'. Check the Hugging Face "
+            f"repository and subfolder."
+        )
+    if not os.path.isfile(config):
+        raise FileNotFoundError(
+            f"No adapter_config.json in '{adapter_path}'. PEFT cannot load the .safetensors "
+            "weights alone; upload the config saved by model.save_pretrained()."
         )
     print(f"[INIT] Adapter weights found: {weights}")
     return adapter_path
@@ -271,6 +307,10 @@ class LineController:
         self.mock = mock
         self.model = None
         self.processor = None
+        # The v2 model contract is exactly 12 chronological images:
+        # 9 earlier images followed by all 3 images in the current batch.
+        self.image_history = deque(maxlen=12)
+        self.vial_position_history = deque(maxlen=12)
 
         if not mock:
             # Resolve (and download if needed) BEFORE touching the GPU, so a bad run name fails fast.
@@ -280,12 +320,17 @@ class LineController:
     def _load_model(self, base_model, adapter_dir):
         import torch
         from peft import PeftModel
-        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+        from transformers import AutoProcessor, Cosmos3OmniForConditionalGeneration
 
-        print(f"[INIT] Loading base model from {base_model}...")
-        self.processor = AutoProcessor.from_pretrained(base_model)
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            base_model, torch_dtype=torch.bfloat16, device_map="cuda"
+        print(f"[INIT] Loading Cosmos 3 Nano base model from {base_model}/{HF_BASE_SUBFOLDER}...")
+        self.processor = AutoProcessor.from_pretrained(
+            base_model, subfolder=HF_BASE_SUBFOLDER
+        )
+        model = Cosmos3OmniForConditionalGeneration.from_pretrained(
+            base_model,
+            subfolder=HF_BASE_SUBFOLDER,
+            dtype=torch.bfloat16,
+            device_map="auto",
         )
         if adapter_dir:
             print(f"[INIT] Attaching fine-tuned LoRA adapter from {adapter_dir}...")
@@ -296,6 +341,81 @@ class LineController:
             print("[INIT] WARNING: no adapter given. Running the UNTRAINED base model.")
         self.model.eval()
         print("[INIT] Model successfully loaded onto GPU.")
+
+    @staticmethod
+    def _parse_assessment(generated_text):
+        """Strictly parse the two-class JSON contract used during v2 training."""
+        text = generated_text.strip()
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            # Keep a narrow recovery path for a model that adds surrounding text,
+            # but still require a valid JSON object and an exact known label.
+            match = re.search(r'\{\s*"assessment"\s*:\s*"[^"}]+"\s*\}', text)
+            if not match:
+                return None
+            try:
+                payload = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(payload, dict) or set(payload) != {"assessment"}:
+            return None
+        assessment = payload.get("assessment")
+        if assessment not in {"potential_carryover", "no_clear_carryover_signal"}:
+            return None
+        return assessment
+
+    @staticmethod
+    def _build_v2_messages(image_paths):
+        """Reproduce the exact multimodal prompt structure used for training."""
+        from PIL import Image
+
+        if len(image_paths) != 12:
+            raise ValueError(f"v2 inspection requires exactly 12 images, got {len(image_paths)}")
+        content = [{"type": "text", "text": CONTAMINATION_SYSTEM_PROMPT}]
+        for index, path in enumerate(image_paths[:9], 1):
+            with Image.open(path) as source:
+                image = source.convert("RGB")
+            content.append({"type": "text", "text": f"Earlier chronological image {index}"})
+            content.append({"type": "image", "image": image})
+
+        content.append({"type": "text", "text": "CURRENT RECIPE BATCH"})
+        for index, path in enumerate(image_paths[9:]):
+            with Image.open(path) as source:
+                image = source.convert("RGB")
+            label = (
+                "First current-batch vial: candidate for assessment"
+                if index == 0
+                else "Additional current-batch vial: reference evidence"
+            )
+            content.append({"type": "text", "text": label})
+            content.append({"type": "image", "image": image})
+        return [{"role": "user", "content": content}]
+
+    def _run_v2_inference(self, image_paths):
+        """Run the fine-tuned adapter and return (assessment, raw model text)."""
+        import torch
+
+        messages = self._build_v2_messages(image_paths)
+        inputs = self.processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        device = self.model.device
+        inputs = {
+            key: value.to(device) if torch.is_tensor(value) else value
+            for key, value in inputs.items()
+        }
+        with torch.inference_mode():
+            output = self.model.generate(**inputs, max_new_tokens=32, do_sample=False)
+        prompt_length = inputs["input_ids"].shape[1]
+        generated = self.processor.batch_decode(
+            output[:, prompt_length:], skip_special_tokens=True
+        )[0].strip()
+        return self._parse_assessment(generated), generated
 
     def pre_fill_check(self, recipe_id, prev_recipe_id, vial_in_batch):
         """
@@ -343,17 +463,13 @@ class LineController:
     def inspect_vial_image(self, image_path, recipe_id, prev_recipe_id, vial_in_batch, row_data=None):
         """
         POST-FILL DETECTION:
-        Runs VLM inference (or mock emulation) to evaluate liquid appearance.
-        Returns parsed action ('STOP_MACHINE' or 'CONTINUE') and diagnostic message.
-        """
-        prev_txt = describe(prev_recipe_id) if prev_recipe_id in RECIPES else "none (start of production run)"
-        prompt = (
-            f"Station 3 Inspection. Current {describe(recipe_id)}. Previous {prev_txt}. "
-            f"This is vial {vial_in_batch} of the batch. Inspect the vial image: Does the liquid match "
-            f"Recipe {recipe_id}? If contaminated, output machine control action STOP_MACHINE, identify "
-            f"the vial, and detail the chemical root cause from the previous recipe."
-        )
+        Buffers the chronological camera stream and, at the end of a batch, runs
+        v2 VLM inference over 9 earlier images plus all 3 current-batch images.
+        The trained target is the first vial of the current batch.
 
+        Returns parsed action ('STOP_MACHINE' or 'CONTINUE') and an operator-safe
+        diagnostic. Invalid model output fails safe and stops the line.
+        """
         if self.mock or self.model is None:
             # Emulate inference using row metadata or clean rules
             is_contaminated = bool(row_data and int(row_data.get("contaminated", 0)))
@@ -380,18 +496,91 @@ class LineController:
                     f"- Batch Position: Vial {vial_in_batch} of 3\n"
                     f"- Verification: Liquid color matches Recipe {recipe_id} specification. No carryover detected."
                 )
-        else:
-            # Real GPU multimodal VLM execution
-            from PIL import Image
-            img = Image.open(image_path).convert("RGB")
-            msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
-            formatted_prompt = self.processor.apply_chat_template(msgs, add_generation_prompt=True)
-            inputs = self.processor(text=[formatted_prompt], images=[img], return_tensors="pt").to("cuda")
-            outputs = self.model.generate(**inputs, max_new_tokens=220)
-            text = self.processor.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+            action = "STOP_MACHINE" if is_contaminated else "CONTINUE"
+            return action, text
 
-        action = "STOP_MACHINE" if "[ACTION: STOP_MACHINE]" in text or "STOP_MACHINE" in text else "CONTINUE"
-        return action, text
+        # Real GPU multimodal VLM execution. The v2 adapter was not trained for
+        # single-image requests, recipe metadata, or free-form STOP_MACHINE text.
+        if not image_path or not os.path.isfile(image_path):
+            text = (
+                "[ACTION: STOP_MACHINE]\n"
+                "ERROR: Camera image is missing or unreadable; AI inspection cannot complete.\n"
+                "- Machine Directive: Line halted fail-safe. Inspect the camera feed and flush the "
+                "nozzle before resuming."
+            )
+            return "STOP_MACHINE", text
+
+        self.image_history.append(image_path)
+        self.vial_position_history.append(vial_in_batch)
+
+        # The first two images of the current batch are buffered as reference
+        # evidence. Classification becomes valid only after vial 3 arrives.
+        if vial_in_batch != 3:
+            return "CONTINUE", (
+                "[ACTION: CONTINUE]\n"
+                f"STATUS: Camera image buffered ({len(self.image_history)}/12); "
+                "awaiting the complete three-vial batch for v2 inspection."
+            )
+
+        expected_positions = [1, 2, 3] * 4
+        if len(self.image_history) < 12:
+            return "CONTINUE", (
+                "[ACTION: CONTINUE]\n"
+                f"STATUS: Building chronological baseline ({len(self.image_history)}/12 images). "
+                "The v2 AI assessment begins once three earlier batches are available."
+            )
+        if list(self.vial_position_history) != expected_positions:
+            text = (
+                "[ACTION: STOP_MACHINE]\n"
+                "ERROR: Camera sequence is incomplete or out of order; expected four chronological "
+                "three-vial batches.\n"
+                "- Machine Directive: Line halted fail-safe. Verify the camera/PLC handshake and "
+                "flush the nozzle before resuming."
+            )
+            return "STOP_MACHINE", text
+
+        assessment, raw_output = self._run_v2_inference(list(self.image_history))
+        if assessment == "potential_carryover":
+            prev_description = (
+                describe(prev_recipe_id)
+                if prev_recipe_id in RECIPES
+                else f"Recipe {prev_recipe_id}"
+            )
+            text = (
+                "[ACTION: STOP_MACHINE]\n"
+                "ERROR: Potential Fluid Carryover Detected.\n"
+                f"- Recipe Being Filled: {describe(recipe_id)}\n"
+                "- Assessed Target: First vial of the current three-vial batch\n"
+                "- Visual Evidence: The first vial does not clearly match the later current-batch "
+                "reference vials when compared with the nine-image chronological history.\n"
+                f"- Likely Process Cause: Residual fluid from {prev_description} remained in the "
+                "shared dispensing nozzle/manifold.\n"
+                "- Machine Directive: Line halted. Operator must flush the nozzle before resuming.\n"
+                f"- AI Assessment: {raw_output}"
+            )
+            return "STOP_MACHINE", text
+
+        if assessment == "no_clear_carryover_signal":
+            text = (
+                "[ACTION: CONTINUE]\n"
+                "STATUS: No clear carryover signal.\n"
+                "- Assessed Target: First vial of the current three-vial batch\n"
+                "- Verification: The first vial is visually consistent with the current-batch "
+                "reference evidence.\n"
+                f"- AI Assessment: {raw_output}"
+            )
+            return "CONTINUE", text
+
+        # Safety interlock policy: an output outside the trained JSON contract is
+        # not evidence that the vial is clean.
+        text = (
+            "[ACTION: STOP_MACHINE]\n"
+            "ERROR: AI inspection returned an invalid or ambiguous response.\n"
+            f"- Raw AI Output: {raw_output!r}\n"
+            "- Machine Directive: Line halted fail-safe. Manually inspect the batch and flush the "
+            "nozzle before resuming."
+        )
+        return "STOP_MACHINE", text
 
     def process_vial(self, image_path, recipe_id, prev_recipe_id, vial_in_batch, row_data=None, enable_pre_fill_guard=False):
         """Full supervisory cycle for one vial position on the line."""
@@ -563,9 +752,9 @@ if __name__ == "__main__":
     ap.add_argument("--recipe", type=int, help="current recipe id")
     ap.add_argument("--prev", type=int, default=0, help="previous recipe id")
     ap.add_argument("--vial", type=int, default=1, help="vial in batch (1, 2, or 3)")
-    ap.add_argument("--base", default="", help="Cosmos Reason base model path (default: download nvidia/Cosmos-Reason1-7B)")
+    ap.add_argument("--base", default="", help="Cosmos 3 base repo/path (default: PourSightAI/CosmosReason3Hackathon, subfolder cosmos3-nano)")
     ap.add_argument("--adapter", default="", help="path to a LOCAL trained LoRA adapter folder")
-    ap.add_argument("--hf-adapter", default="", help="run name to download from Hugging Face, e.g. run-01 (adapters/<run>/)")
+    ap.add_argument("--hf-adapter", default="", help="adapter subfolder in the Hugging Face repo (use original_v2 for the trained v2 model)")
     ap.add_argument("--hf-repo", default=HF_REPO, help="Hugging Face repo holding the adapters")
     ap.add_argument("--mock", action="store_true", help="run simulation mode without GPU")
     ap.add_argument("--predictive", action="store_true", help="enable pre-fill predictive prevention")
@@ -645,3 +834,4 @@ if __name__ == "__main__":
             simulate_production_run(default_plan, mock=True, enable_pre_fill_guard=False)
         else:
             ap.print_help()
+
