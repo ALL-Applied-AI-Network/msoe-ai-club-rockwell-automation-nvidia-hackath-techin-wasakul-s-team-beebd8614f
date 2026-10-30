@@ -1,232 +1,160 @@
 # PourSightAI — Project Runbook
 
 **Project:** PourSightAI  
-**Purpose:** Detect potential liquid cross-contamination in vials on the CSI production line.  
-**Environment:** NVIDIA BREV, Ubuntu 24.04, NVIDIA Isaac Sim / Omniverse, Cosmos 3 Nano Reasoner  
-**Status:** Development and integration
+**Purpose:** Detect likely liquid carryover and contamination in vials using the repository's advisory inspection logic.  
+**Environment:** BREV / Ubuntu, Python, project repository checkout, and optional model environment  
+**Status:** Development and validation
 
 ---
 
 ## 1. Project Overview
 
-PourSightAI is an independent, read-only inspection system designed to identify potential cross-contamination between liquid vials.
+PourSightAI is a read-only inspection and advisory system designed to identify likely cross-contamination between liquid vials. The software analyzes vial appearance, recipe context, and recent production history without sending commands to the physical line.
 
-The system compares a target vial's observed color against:
-- Its expected recipe color.
-- Other vials in the same production sequence.
-- Relevant production and recipe information.
+This repository is organized around the following key pieces:
 
-The system should observe and report results without controlling or modifying the physical production line.
+- `src/line_controller.py` — primary inspection and reporting logic
+- `tests/test_line_controller.py` — expected behavior checks for mock runtime flow
+- `twin_data/` — digital-twin generation and sample dataset utilities
+- `models/` — model weight notes and Hugging Face references
+- `requirements.txt` — Python dependencies for the project
 
-## 2. System Environment
+The system should observe, assess, and report results without controlling equipment.
 
-| Component | Configuration |
-|---|---|
-| Operating environment | BREV Ubuntu 24.04.3 |
-| Project directory | `/workspace/twin_data` |
-| Digital twin | `/workspace/csi_digital_twin_v1` |
-| Cosmos environment | `/workspace/cosmos3-env` |
-| Python interpreter | `/workspace/cosmos3-env/bin/python` |
-| GPU | NVIDIA RTX PRO 6000 Blackwell |
-| AI model | Cosmos 3 Nano Reasoner |
-| Hugging Face account | `PourSightAI` |
-| Dataset repository | `PourSightAI/Training_Data` |
+## 2. Repository Layout
 
-Always use the explicit Python interpreter above when running Cosmos-related scripts.
+Expected repository root:
 
-## 3. Environment Startup
-
-Open the BREV environment through VS Code or its terminal.
-
-Activate the Cosmos environment:
-
-```bash
-source /workspace/cosmos3-env/bin/activate
+```text
+/workspace
+├── README.md
+├── requirements.txt
+├── src/
+│   ├── line_controller.py
+│   ├── test_system.py
+│   └── train_cosmos_lora.py
+├── tests/
+│   ├── test_line_controller.py
+│   └── mock_production_line_demo.py
+├── twin_data/
+│   ├── README.md
+│   └── ...
+├── models/
+│   └── README.md
+└── ...
 ```
+
+If the repository is checked out somewhere else, replace `/workspace` below with that path.
+
+## 3. Environment Setup
+
+Use the Python interpreter available in the environment where the repository is running. Do not assume a conda or venv name is present.
 
 Verify Python:
 
 ```bash
-/workspace/cosmos3-env/bin/python --version
+python --version
 ```
 
-Verify GPU availability:
+Install project dependencies if needed:
 
 ```bash
-/workspace/cosmos3-env/bin/python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+cd /workspace
+python -m pip install -r requirements.txt
 ```
 
-Expected result:
-- CUDA availability: `True`
-- GPU: NVIDIA RTX PRO 6000 Blackwell Server Edition
-
-## 4. Dataset Management
-
-### Dataset location
-
-```text
-/workspace/twin_data/
-```
-
-The project contains generated vial images, labels, metadata, and supporting scripts.
-
-One established dataset:
-
-```text
-/workspace/twin_data/full_dataset_5000/
-├── images/
-└── labels.csv
-```
-
-Note: The folder name does not indicate the exact image count. The dataset previously validated contained 4,803 images.
-
-### Dataset validation
-
-Check the image count:
+If the project needs to import from `src`, either run from the repo root or add it to `PYTHONPATH`:
 
 ```bash
-find /workspace/twin_data/full_dataset_5000/images \
--type f | wc -l
+cd /workspace
+export PYTHONPATH="$PWD/src:$PYTHONPATH"
 ```
 
-Inspect CSV headers:
+## 4. Validation Commands
+
+Run the project’s unit tests from the repository root:
 
 ```bash
-head -n 5 /workspace/twin_data/full_dataset_5000/labels.csv
+cd /workspace
+export PYTHONPATH="$PWD/src:$PYTHONPATH"
+python -m pytest -q tests/test_line_controller.py
 ```
 
-Check that image and label counts match before training.
+Expected outcome: the mock controller tests pass and the API contract remains stable.
 
-### Dataset labels
-
-The dataset includes information such as:
-
-- Recipe ID
-- Previous recipe ID
-- Vial index
-- Contamination label
-- Expected and observed color
-- RGB measurements
-- Carryover information
-- Fill-level information
-
-Contamination labels:
-- `0` — Clean
-- `1` — Contaminated
-
-## 5. Hugging Face Dataset Upload
-
-The existing dataset repository is:
-
-`PourSightAI/Training_Data`
-
-To upload a dataset directory:
+Quick smoke check without the full model stack:
 
 ```bash
-HF_XET_HIGH_PERFORMANCE=1 \
-/workspace/cosmos3-env/bin/hf upload \
-PourSightAI/Training_Data \
-/workspace/twin_data/full_dataset_5000 \
-full_dataset_5000 \
---type dataset \
---commit-message "Upload vial dataset"
+cd /workspace
+export PYTHONPATH="$PWD/src:$PYTHONPATH"
+python src/line_controller.py --mock --predictive
 ```
 
-Verify the upload through the Hugging Face repository website.
+Important: the tests import `line_controller` from `src/`, not from the repo root directly.
 
-Do not create another repository unless the project team explicitly decides to do so.
+## 5. Dataset and Twin Data
 
-## 6. Cosmos 3 Nano
+This repository includes the digital-twin/data-generation pipeline under `twin_data/`.
 
-### Model information
-
-- Model: Cosmos 3 Nano Reasoner
-- Repository: `PourSightAI/CosmosReason3Hackathon`
-- Model directory: `cosmos3-nano/`
-
-The model has previously been loaded successfully using the Transformers-based workflow.
-
-### Authentication check
+Useful commands:
 
 ```bash
-/workspace/cosmos3-env/bin/hf auth whoami
+cd /workspace
+ls twin_data
 ```
 
-### Important considerations
+The project documentation explains that the digital twin is used to generate synthetic vial data and labels. The real trained model weights are expected to live on Hugging Face rather than in GitHub.
 
-Cosmos should assist with visual reasoning, not serve as the only contamination detector.
+Important notes:
 
-The inspection pipeline should combine:
-1. Image acquisition.
-2. Vial detection.
-3. Color measurement.
-4. Comparison against expected and neighboring vial colors.
-5. AI-assisted interpretation.
-6. Inspection reporting.
+- Do not commit large datasets or model weights to GitHub.
+- Keep generated images/labels local unless intentionally uploaded.
+- Use the data folders and scripts in `twin_data/` for testing and validation.
 
-Any model changes or LoRA training should be validated against held-out data before being used in the physical demonstration.
+## 6. Model / Hugging Face Guidance
 
-## 7. Digital Twin
+The repo notes that trained weights are stored on Hugging Face, not in the repository itself.
 
-Project directory:
+Relevant references:
 
-```text
-/workspace/csi_digital_twin_v1
-```
+- `models/README.md`
+- `src/line_controller.py` constants such as `HF_REPO`, `HF_BASE_ID`, and `HF_ADAPTER_SUBFOLDER`
 
-The digital twin is used to generate simulated production data and vial images.
+The project expects the model repo and adapter folder to be resolved at runtime. The code is designed to fail fast if a required adapter or config is missing rather than silently falling back to an untrained model.
 
-Use generated data to:
-- Test contamination scenarios.
-- Validate image-processing logic.
-- Generate training examples.
-- Evaluate model performance.
+## 7. Production-Line Demonstration Constraints
 
-The digital twin is a development and testing resource. It is not a substitute for validating the system against real CSI production-line images.
+This project is advisory-only. It must remain read-only with respect to manufacturing equipment.
 
-## 8. Live CSI Demonstration
+The inspection system should:
 
-### Objective
+1. Receive vial images or image sequences.
+2. Use recipe and batch context.
+3. Compare current appearance to expected color and recent history.
+4. Produce an operator-facing advisory report.
+5. Never send control commands to production equipment.
 
-Demonstrate PourSightAI detecting potential cross-contamination on the physical CSI production line.
+The report layer is intended for operator review and dashboards, not machine actuation.
 
-### Expected operating workflow
+## 8. Operational Principles
 
-1. CSI production line operates normally.
-2. A camera captures images of the vials.
-3. PourSightAI receives the camera images on its inspection computer.
-4. The program identifies the vials.
-5. The program compares observed colors against expected recipe colors and surrounding vials.
-6. Cosmos 3 Nano assists with visual interpretation.
-7. PourSightAI reports the inspection result.
-
-### Hardware and access requirements
-
-These items still need confirmation:
-
-- [ ] Identify the existing CSI camera make and model.
-- [ ] Confirm how the inspection computer receives camera images.
-- [ ] Confirm camera feed permissions and access.
-- [ ] Determine camera resolution and frame rate.
-- [ ] Identify how recipe and production-sequence information will be obtained.
-- [ ] Confirm the physical computer that will run PourSightAI.
-- [ ] Test image acquisition without interfering with production.
-
-**Important:** The inspection system must remain read-only. It must not send commands to production equipment.
+- The inspection system is not a PLC or machine controller.
+- If a result is ambiguous, report uncertainty instead of making a definitive claim.
+- The software may recommend operational action, but it does not directly stop or modify the line.
+- Model and adapter changes require validation before being trusted in active demonstrations.
 
 ## 9. Troubleshooting
 
 | Problem | Recommended action |
 |---|---|
-| Wrong Python interpreter | Use `/workspace/cosmos3-env/bin/python` explicitly. |
-| CUDA unavailable | Check GPU visibility and PyTorch installation. |
-| Hugging Face authentication failure | Run `hf auth whoami` and verify login. |
-| Dataset image count mismatch | Compare image filenames against CSV entries. |
-| Cosmos model fails to load | Check model repository, checkpoint path, and environment. |
-| Python code produces Bash errors | Save Python code in a `.py` file and execute it with Python. |
-| CSI camera unavailable | Verify camera permissions, connection, and image-feed method with CSI staff. |
+| `ModuleNotFoundError: No module named 'line_controller'` | Run from the repo root and set `PYTHONPATH=$PWD/src` |
+| pytest import fails | Use `python -m pytest -q tests/test_line_controller.py` from `/workspace` |
+| A function returns the wrong tuple shape | Confirm it returns `(status, report)` as expected by tests |
+| Model fails to load | Check adapter path, model repo, and local environment variables |
+| Missing dataset files | Validate the `twin_data/` folder and any generated output paths |
+| CUDA or ML tooling missing | Install project dependencies and validate the active Python environment |
 
-## 10. GitHub Version Control
+## 10. GitHub Workflow
 
 Before making significant changes:
 
@@ -235,7 +163,7 @@ git status
 git pull
 ```
 
-After completing a working change:
+After a working change:
 
 ```bash
 git add .
@@ -260,22 +188,18 @@ Avoid `git reset --hard` on shared branches because it can discard work and rewr
 
 ## 11. Pre-Demonstration Checklist
 
-- [ ] BREV environment accessible.
-- [ ] Correct Python environment activated.
-- [ ] GPU available.
-- [ ] Cosmos 3 Nano loads successfully.
-- [ ] Dataset validated.
-- [ ] Image acquisition tested.
-- [ ] Camera access confirmed.
-- [ ] Vial detection tested.
-- [ ] Expected recipe information available.
-- [ ] Cross-vial comparison tested.
-- [ ] Clean and contaminated examples tested.
-- [ ] Results can be displayed to the team.
-- [ ] Inspection system does not control production equipment.
+- [ ] Repository is checked out in the expected workspace.
+- [ ] Python environment is active and dependencies are installed.
+- [ ] `PYTHONPATH` includes `src/` when needed.
+- [ ] Unit tests pass.
+- [ ] Model or adapter is available if running the real inference path.
+- [ ] Dataset is validated and paths are correct.
+- [ ] The inspection report is advisory-only.
+- [ ] No control commands are sent to the production line.
+- [ ] Results can be displayed to the team without modifying equipment.
 
-## 12. Operational Principle
+## 12. Final Notes
 
-PourSightAI is an independent inspection system. Its purpose is to observe, analyze, and report potential contamination while allowing the CSI production line to operate normally.
+The project is best treated as an AI-assisted inspection and reporting pipeline. It is not a machine-control layer, and it should remain so during the hackathon and final demonstration.
 
-When confidence is insufficient, report an uncertain result rather than declaring a vial contaminated or clean without sufficient evidence.
+If anything in this runbook conflicts with the repository itself, the repository files (`src/`, `tests/`, `twin_data/`, and `models/`) are the source of truth.
