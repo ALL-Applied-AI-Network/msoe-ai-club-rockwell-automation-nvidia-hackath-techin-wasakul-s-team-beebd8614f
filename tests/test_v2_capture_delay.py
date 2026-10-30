@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Regression test for the two-capture v2 target delay."""
 
+import io
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +66,43 @@ class V2CaptureDelayTest(unittest.TestCase):
             self.assertEqual(submitted[9], paths[9])
             self.assertEqual(submitted[10], paths[10])
             self.assertEqual(submitted[11], paths[11])
+
+    def test_contamination_report_attaches_image_from_two_vials_earlier(self):
+        controller = LineController(mock=True)
+        controller.mock = False
+        controller.model = object()
+        controller._run_v2_inference = lambda image_paths: (
+            "potential_carryover",
+            '{"assessment":"potential_carryover"}',
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for index in range(12):
+                path = Path(directory) / f"vial_{index + 1:06d}.png"
+                path.touch()
+                paths.append(str(path))
+
+            output = io.StringIO()
+            status = None
+            with redirect_stdout(output):
+                for index, (path, position) in enumerate(
+                    zip(paths, [1, 2, 3] * 4)
+                ):
+                    current_recipe = 5 if index < 9 else 6
+                    previous_recipe = 0 if index < 9 else 5
+                    status = controller.process_vial(
+                        path,
+                        current_recipe,
+                        previous_recipe,
+                        position,
+                    )
+
+            self.assertEqual(status, "CONTAMINATION_REPORTED")
+            self.assertEqual(controller.last_report["image_path"], paths[9])
+            self.assertEqual(controller.last_report["type"], "contamination")
+            self.assertIn(f"[REPORT IMAGE] {paths[9]}", output.getvalue())
+            self.assertNotIn(f"[REPORT IMAGE] {paths[11]}", output.getvalue())
 
 
 if __name__ == "__main__":
