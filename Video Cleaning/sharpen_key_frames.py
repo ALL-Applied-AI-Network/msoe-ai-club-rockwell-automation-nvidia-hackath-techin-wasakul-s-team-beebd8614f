@@ -14,7 +14,7 @@ find_key_frames.py vial_fill_from_video:
 Writes:
   key_frames_sharp/            one clear picture per vial (full frame)
   key_frames_zoom/             same, cropped to the vial and enlarged 1.5x
-  key_frames_sharp.csv         video, vial, time, sharpness
+  key_frames_sharp.csv         video, vial, time, sharpness, chronological order
   key_frames_sharp_check.jpg   contact sheet, to eyeball
 """
 from pathlib import Path
@@ -40,7 +40,8 @@ def crop(img, box):
     return img[y1:y2, x1:x2]
 
 
-keys = pd.read_csv("key_frames_from_video.csv")
+keys = pd.read_csv("key_frames_from_video.csv").sort_values(["video_id", "video_s"]).reset_index(drop=True)
+keys["chronological_order"] = keys.index + 1
 out = Path("key_frames_sharp")
 out.mkdir(exist_ok=True)
 zoom = Path("key_frames_zoom")
@@ -91,12 +92,13 @@ for vid, group in keys.groupby("video_id"):
         g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
         sharp_after = cv2.Laplacian(crop(g, VIAL_BOX), cv2.CV_32F).var()
 
-        name = f"v{vid}_vial{int(k['vial_in_video']):02d}_{times[best]:07.2f}s.jpg"
+        name = f"{int(k['chronological_order']):03d}_v{vid}_vial{int(k['vial_in_video']):02d}_{times[best]:07.2f}s.jpg"
         cv2.imwrite(str(out / name), img, [cv2.IMWRITE_JPEG_QUALITY, 98])
         z = cv2.resize(crop(img, ZOOM_BOX), None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
         cv2.imwrite(str(zoom / name), z, [cv2.IMWRITE_JPEG_QUALITY, 98])
         results.append({
             "video_id": vid, "vial_in_video": int(k["vial_in_video"]), "filename": name,
+            "chronological_order": int(k["chronological_order"]),
             "video_s": round(times[best], 2),
             "sharpness_before": round(sharp[min(range(len(times)), key=lambda n: abs(times[n] - k["video_s"]))]),
             "sharpness_after": round(sharp_after),

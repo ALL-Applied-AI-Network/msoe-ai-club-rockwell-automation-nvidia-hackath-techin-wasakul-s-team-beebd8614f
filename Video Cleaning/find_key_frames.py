@@ -7,7 +7,7 @@ Run from inside csi-vial-fill-dataset/:
   python3 find_key_frames.py vial_fill_from_video   (pictures from video_to_frames.py)
 Only reads the dataset. Writes (with "_from_video" added for the video pictures):
   key_frames/            copies of the key frames (one per vial)
-  key_frames.csv         one row per vial: video, frame, time
+  key_frames.csv         one row per vial: video, frame, time, chronological order
   key_frames_check.jpg   contact sheet of all key frames, to eyeball
 
 How it works (640x480 vial_fill camera, fixed position):
@@ -102,14 +102,17 @@ for vid, g in idx.groupby("video_id"):
             })
 
 keys = pd.DataFrame(keys)
+keys = keys.sort_values(["video_id", "video_s"]).reset_index(drop=True)
 keys["vial_in_video"] = keys.groupby("video_id").cumcount() + 1
+keys["chronological_order"] = keys.index + 1
 keys.to_csv(f"key_frames{TAG}.csv", index=False)
 
 out = Path(f"key_frames{TAG}")
 out.mkdir(exist_ok=True)
 for _, r in keys.iterrows():
+    order = f"{int(r['chronological_order']):03d}"
     shutil.copy(f"{CAM}/images/{r['filename']}",
-                out / f"v{r['video_id']}_vial{r['vial_in_video']:02d}_{r['filename']}")
+                out / f"{order}_v{r['video_id']}_vial{r['vial_in_video']:02d}_{r['filename']}")
 
 # contact sheet to eyeball the results
 cols, w, h = 8, 160, 120
@@ -119,7 +122,7 @@ for n, (_, r) in enumerate(keys.iterrows()):
     im = Image.open(f"{CAM}/images/{r['filename']}").resize((w, h))
     d = ImageDraw.Draw(im)
     d.rectangle([0, 0, 80, 12], fill="black")
-    d.text((2, 1), f"v{r['video_id']} #{r['vial_in_video']}", fill="yellow")
+    d.text((2, 1), f"#{r['chronological_order']} v{r['video_id']}", fill="yellow")
     sheet.paste(im, ((n % cols) * w, (n // cols) * h))
 sheet.save(f"key_frames{TAG}_check.jpg")
 
