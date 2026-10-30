@@ -1,30 +1,26 @@
-"""
-Industrial Line Controller & Safety Interlock (Fluid Mixing Station 3)
-Rockwell Automation + NVIDIA Physical AI Prototype
+"""AI contamination assessment and operator reporting for Fluid Mixing Station 3.
 
-Connects the AI inspection model to the production line control logic:
-  1. Pre-Fill Guard (Predictive): checks recipe transition risk before dispensing.
-  2. Post-Fill Inspection (Reactive): analyzes camera feed, detects carryover,
-     and triggers an emergency stop / interlock with full root-cause diagnostics.
-  3. EtherNet/IP (CIP) Interface: communicates directly with physical Allen-Bradley
-     ControlLogix / CompactLogix PLCs via native EtherNet/IP (pylogix).
-  4. Simulation / Mock Mode: allows complete offline testing without hardware.
+The controller has two advisory paths:
+  1. Predictive: evaluates recipe-transition carryover risk.
+  2. Reactive: analyzes the trained Cosmos 3 vial-image sequence.
+
+This module does not connect to a machine-control interface. When attention is
+required it prints a structured report for a user interface to consume later.
 
 Usage:
-  # 1. Offline simulation on planned run (any computer, no GPU/PLC needed):
+  # Offline mock report demo:
   python3 src/line_controller.py --plan twin_data/demo_out/plan.csv --mock
 
-  # 2. Predictive pre-fill prevention mode:
+  # Predictive recipe-transition reporting:
   python3 src/line_controller.py --plan twin_data/demo_out/plan.csv --mock --predictive
 
-  # 2b. REAL v2 TRAINED MODEL, adapter pulled from Hugging Face
-  #     (needs GPU + torch/transformers/peft and 12 chronological images):
-  python3 src/line_controller.py --plan twin_data/demo_out/plan.csv --img-root <folder with images> \
-      --hf-adapter original_v2
+  # Real v2 trained model from Hugging Face:
+  python3 src/line_controller.py --plan twin_data/demo_out/plan.csv \
+      --img-root <folder with images> --hf-adapter original_v2
 
-  # 3. PHYSICAL CSI LINE (EtherNet/IP to Rockwell PLC):
-  python3 src/line_controller.py --plc-ip 192.168.1.10 --plc-slot 0 --live \
-      --image-dir /path/to/camera_inbox --hf-adapter original_v2
+  # Watch frames written by live_vial_capture.py (advisory output only):
+  python3 src/line_controller.py --live --image-dir camera_inbox \
+      --recipe 6 --prev 5 --hf-adapter original_v2
 """
 
 import argparse
@@ -72,13 +68,6 @@ Return only this JSON object, with no markdown:
 or
 {"assessment":"no_clear_carryover_signal"}
 """
-
-# Attempt EtherNet/IP driver import (pylogix)
-try:
-    from pylogix import PLC
-    HAS_PYLOGIX = True
-except ImportError:
-    HAS_PYLOGIX = False
 
 # Recipe specification table (pure plant engineering tags: Tank 100, Tank 200, Tank 400)
 RECIPES = {
@@ -159,151 +148,9 @@ def color_distance(rgb1, rgb2):
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(rgb1, rgb2)))
 
 
-class RockwellPLCInterlock:
-    """
-    Rockwell Automation EtherNet/IP Driver & Safety Interlock.
-    Communicates directly with Allen-Bradley ControlLogix/CompactLogix PLCs over CIP protocol.
-    Falls back gracefully to simulation mode if no live PLC IP is supplied.
-    """
-    DEFAULT_TAG_MAP = {
-        # Outputs to PLC (Interlocks & Safety Control)
-        "Line_Running": "Station3_Line_Running",
-        "Station3_Dispense_Permissive": "Station3_Dispense_Permissive",
-        "MagneMover_Infeed_Active": "Station3_MagneMover_Infeed_Active",
-        "Alarm_Carryover_Fault": "Station3_Alarm_Carryover",
-        "Alarm_E_Stop": "Station3_E_Stop",
-        "Flush_Cycle_Required": "Station3_Flush_Required",
-        "Fault_Code": "Station3_Fault_Code",
-        "Inspection_Complete": "Station3_Inspection_Complete",
-
-        # Inputs from PLC (Line Sensors & Cart Arrival)
-        "Cart_In_Position": "Station3_Cart_In_Position",
-        "Current_Recipe": "Station3_Current_Recipe",
-        "Prev_Recipe": "Station3_Prev_Recipe",
-        "Vial_Number": "Station3_Vial_Number",
-    }
-
-    def __init__(self, plc_ip=None, slot=0, micro800=False, custom_tags=None):
-        self.plc_ip = plc_ip
-        self.slot = slot
-        self.micro800 = micro800
-        self.comm = None
-        self.is_hardware_connected = False
-
-        # Tag dictionary (in-memory state)
-        self.tags = {
-            "Line_Running": True,
-            "Station3_Dispense_Permissive": True,
-            "MagneMover_Infeed_Active": True,
-            "Alarm_Carryover_Fault": False,
-            "Alarm_E_Stop": False,
-            "Flush_Cycle_Required": False,
-            "Fault_Code": 0,
-            "Inspection_Complete": False,
-            "Cart_In_Position": False,
-            "Current_Recipe": 5,
-            "Prev_Recipe": 0,
-            "Vial_Number": 1,
-        }
-
-        # Configure EtherNet/IP tag names (default or custom)
-        self.tag_map = dict(self.DEFAULT_TAG_MAP)
-        if custom_tags:
-            self.tag_map.update(custom_tags)
-
-        # Initialize physical EtherNet/IP connection if IP provided
-        if self.plc_ip:
-            self._connect_ethernet_ip()
-        else:
-            print("[PLC DRIVER] Running in simulated software interlock mode (no --plc-ip specified).")
-
-    def _connect_ethernet_ip(self):
-        if not HAS_PYLOGIX:
-            print("[PLC DRIVER ERROR] 'pylogix' library is not installed.")
-            print("  Please install it to connect to the physical PLC: pip install pylogix")
-            print("  Falling back to simulated mode.")
-            return
-
-        try:
-            print(f"[ETHERNET/IP] Initializing CIP connection to Rockwell PLC at {self.plc_ip} (Slot {self.slot})...")
-            self.comm = PLC()
-            self.comm.IPAddress = self.plc_ip
-            self.comm.ProcessorSlot = self.slot
-            self.comm.Micro800 = self.micro800
-
-            # Attempt handshake query
-            prop = self.comm.GetDeviceProperties()
-            if prop.Status == "Success":
-                self.is_hardware_connected = True
-                print(f"[ETHERNET/IP] Connected successfully to Rockwell PLC: {prop.ProductName} (Rev: {prop.Revision})")
-            else:
-                print(f"[ETHERNET/IP WARNING] Initial handshake test returned status: {prop.Status}. Will attempt tag reads/writes directly.")
-                self.is_hardware_connected = True
-        except Exception as e:
-            print(f"[ETHERNET/IP ERROR] Connection to {self.plc_ip} failed: {e}. Running in simulated mode.")
-            self.is_hardware_connected = False
-
-    def read_tag(self, key, default=None):
-        """Reads a tag from the physical PLC via EtherNet/IP (or in-memory cache)."""
-        if self.is_hardware_connected and self.comm:
-            plc_tag = self.tag_map.get(key, key)
-            try:
-                ret = self.comm.Read(plc_tag)
-                if ret.Status == "Success":
-                    self.tags[key] = ret.Value
-                    return ret.Value
-                else:
-                    print(f"[ETHERNET/IP READ WARN] Tag '{plc_tag}': {ret.Status}")
-            except Exception as e:
-                print(f"[ETHERNET/IP READ ERROR] {e}")
-        return self.tags.get(key, default)
-
-    def write_tag(self, key, value):
-        """Writes a tag to the physical Rockwell PLC via EtherNet/IP and updates local state."""
-        self.tags[key] = value
-        if self.is_hardware_connected and self.comm:
-            plc_tag = self.tag_map.get(key, key)
-            try:
-                ret = self.comm.Write(plc_tag, value)
-                if ret.Status == "Success":
-                    print(f"[ETHERNET/IP WRITE OK] Wrote PLC tag '{plc_tag}' = {value}")
-                else:
-                    print(f"[ETHERNET/IP WRITE FAIL] Tag '{plc_tag}' = {value}: {ret.Status}")
-            except Exception as e:
-                print(f"[ETHERNET/IP WRITE ERROR] {e}")
-
-    def emergency_stop(self, fault_code, reason):
-        """Trips physical and logical safety interlocks."""
-        self.write_tag("Line_Running", False)
-        self.write_tag("Station3_Dispense_Permissive", False)
-        self.write_tag("MagneMover_Infeed_Active", False)
-        self.write_tag("Alarm_Carryover_Fault", True)
-        self.write_tag("Alarm_E_Stop", True)
-        self.write_tag("Flush_Cycle_Required", True)
-        self.write_tag("Fault_Code", fault_code)
-
-    def reset_and_flush(self):
-        """Resets safety interlocks and restores permissives after an operator flush."""
-        self.write_tag("Alarm_Carryover_Fault", False)
-        self.write_tag("Alarm_E_Stop", False)
-        self.write_tag("Flush_Cycle_Required", False)
-        self.write_tag("Fault_Code", 0)
-        self.write_tag("Line_Running", True)
-        self.write_tag("Station3_Dispense_Permissive", True)
-        self.write_tag("MagneMover_Infeed_Active", True)
-
-    def close(self):
-        if self.comm:
-            try:
-                self.comm.Close()
-            except Exception:
-                pass
-
-
 class LineController:
-    def __init__(self, base_model=None, adapter_path=None, plc_ip=None, plc_slot=0, custom_tags=None,
-                 mock=False, hf_adapter="", hf_repo=HF_REPO):
-        self.plc = RockwellPLCInterlock(plc_ip=plc_ip, slot=plc_slot, custom_tags=custom_tags)
+    def __init__(self, base_model=None, adapter_path=None, mock=False,
+                 hf_adapter="", hf_repo=HF_REPO):
         self.mock = mock
         self.model = None
         self.processor = None
@@ -526,7 +373,7 @@ class LineController:
         PREDICTIVE PREVENTION:
         Evaluates recipe transition before the nozzle dispenses into the vial.
         Calculates fluid carryover risk using the physical Beer-Lambert model.
-        If carryover risk is critical, halts before dispensing.
+        If carryover risk is critical, produces a pause-and-flush recommendation before dispensing.
         """
         if vial_in_batch != 1 or not prev_recipe_id or prev_recipe_id not in RECIPES:
             return {"action": "PERMIT_FILL", "risk": "LOW", "detail": "Clean batch or continuous recipe"}
@@ -571,8 +418,8 @@ class LineController:
         v2 VLM inference over 9 earlier images plus all 3 current-batch images.
         The trained target is the first vial of the current three-vial batch.
 
-        Returns parsed action ('STOP_MACHINE' or 'CONTINUE') and an operator-safe
-        diagnostic. Invalid model output fails safe and stops the line.
+        Returns an advisory action ('REPORT_ATTENTION' or 'CONTINUE') and an
+        operator-safe diagnostic. Invalid model output requests operator review.
         """
         if self.mock or self.model is None:
             # Emulate inference using row metadata or clean rules
@@ -582,7 +429,7 @@ class LineController:
                 prev_tanks = [TANK[t] for t in ORDER if t in RECIPES[prev_recipe_id] and t != 100]
                 curr_tanks = [TANK[t] for t in ORDER if t in RECIPES[recipe_id] and t != 100]
                 text = (
-                    f"[ACTION: STOP_MACHINE]\n"
+                    f"[RECOMMENDATION: PAUSE_AND_FLUSH]\n"
                     f"ERROR: Fluid Contamination Detected.\n"
                     f"- Recipe Being Filled: Recipe {recipe_id} ({describe(recipe_id).split(': ', 1)[1]})\n"
                     f"- Batch Position: Vial {vial_in_batch} of 3\n"
@@ -590,29 +437,29 @@ class LineController:
                     f"- Root Cause: Carryover from previous Recipe {prev_recipe_id} ({describe(prev_recipe_id).split(': ', 1)[1]}). "
                     f"Residual fluid from {', '.join(prev_tanks)} remained in the shared dispensing nozzle/manifold "
                     f"and cross-contaminated the incoming fluid from {', '.join(curr_tanks)}.\n"
-                    f"- Machine Directive: Line halted. Initiate nozzle flush cycle before resuming."
+                    f"- Operator Recommendation: Pause the line and flush the nozzle before continuing."
                 )
             else:
                 text = (
-                    f"[ACTION: CONTINUE]\n"
+                    f"[REPORT: CONTINUE]\n"
                     f"STATUS: Normal.\n"
                     f"- Recipe Being Filled: Recipe {recipe_id}\n"
                     f"- Batch Position: Vial {vial_in_batch} of 3\n"
                     f"- Verification: Liquid color matches Recipe {recipe_id} specification. No carryover detected."
                 )
-            action = "STOP_MACHINE" if is_contaminated else "CONTINUE"
+            action = "REPORT_ATTENTION" if is_contaminated else "CONTINUE"
             return action, text
 
         # Real GPU multimodal VLM execution. The v2 adapter was not trained for
-        # single-image requests, recipe metadata, or free-form STOP_MACHINE text.
+        # single-image requests, recipe metadata, or free-form report text.
         if not image_path or not os.path.isfile(image_path):
             text = (
-                "[ACTION: STOP_MACHINE]\n"
+                "[RECOMMENDATION: PAUSE_AND_FLUSH]\n"
                 "ERROR: Camera image is missing or unreadable; AI inspection cannot complete.\n"
-                "- Machine Directive: Line halted fail-safe. Inspect the camera feed and flush the "
-                "nozzle before resuming."
+                "- Operator Recommendation: Pause operation, inspect the camera feed, and flush "
+                "the nozzle before continuing."
             )
-            return "STOP_MACHINE", text
+            return "REPORT_ATTENTION", text
 
         self.image_history.append(image_path)
         self.vial_position_history.append(vial_in_batch)
@@ -621,7 +468,7 @@ class LineController:
         # evidence. Classification becomes valid only after vial 3 arrives.
         if vial_in_batch != 3:
             return "CONTINUE", (
-                "[ACTION: CONTINUE]\n"
+                "[REPORT: CONTINUE]\n"
                 f"STATUS: Camera image buffered ({len(self.image_history)}/12); "
                 "awaiting the complete three-vial batch for v2 inspection."
             )
@@ -629,19 +476,19 @@ class LineController:
         expected_positions = [1, 2, 3] * 4
         if len(self.image_history) < 12:
             return "CONTINUE", (
-                "[ACTION: CONTINUE]\n"
+                "[REPORT: CONTINUE]\n"
                 f"STATUS: Building chronological baseline ({len(self.image_history)}/12 images). "
                 "The v2 AI assessment begins once three earlier batches are available."
             )
         if list(self.vial_position_history) != expected_positions:
             text = (
-                "[ACTION: STOP_MACHINE]\n"
+                "[RECOMMENDATION: PAUSE_AND_FLUSH]\n"
                 "ERROR: Camera sequence is incomplete or out of order; expected four chronological "
                 "three-vial batches.\n"
-                "- Machine Directive: Line halted fail-safe. Verify the camera/PLC handshake and "
-                "flush the nozzle before resuming."
+                "- Operator Recommendation: Pause operation, verify the camera sequence, and "
+                "flush the nozzle before continuing."
             )
-            return "STOP_MACHINE", text
+            return "REPORT_ATTENTION", text
 
         images = list(self.image_history)
         target_index = len(images) - 3
@@ -650,7 +497,7 @@ class LineController:
 
         if assessment == "potential_carryover":
             text = (
-                "[ACTION: STOP_MACHINE]\n"
+                "[RECOMMENDATION: PAUSE_AND_FLUSH]\n"
                 "ERROR: Potential Fluid Carryover Detected.\n"
                 "- Assessed Target: The image two frames ago, evaluated with the surrounding visual history.\n"
                 "- Visual Evidence: The candidate frame does not clearly match the recent sequence and nearby reference views.\n"
@@ -670,7 +517,7 @@ class LineController:
 
         if assessment == "no_clear_carryover_signal":
             text = (
-                "[ACTION: CONTINUE]\n"
+                "[REPORT: CONTINUE]\n"
                 "STATUS: No clear carryover signal.\n"
                 "- Assessed Target: The image two frames ago, evaluated with the surrounding visual history.\n"
                 "- Verification: The candidate frame is visually consistent with the recent and nearby reference evidence.\n"
@@ -687,11 +534,20 @@ class LineController:
             return "CONTINUE", text
 
         text = (
-            "[ACTION: STOP_MACHINE]\n"
+            "[RECOMMENDATION: PAUSE_AND_FLUSH]\n"
             "ERROR: AI inspection returned an invalid or ambiguous response.\n"
             f"- Raw AI Output: {raw_output!r}\n"
-            "- Machine Directive: Line halted fail-safe. Manually inspect the batch and flush the "
-            "nozzle before resuming."
+            "- Operator Recommendation: Pause operation, manually inspect the batch, and flush "
+            "the nozzle before continuing."
+        )
+        return "REPORT_ATTENTION", text
+
+    def process_vial(self, image_path, recipe_id, prev_recipe_id, vial_in_batch,
+                     row_data=None, enable_pre_fill_guard=False):
+        """Assess one vial event and print an operator-facing report."""
+        print(
+            f"\n>>> [VIAL EVENT] Recipe {recipe_id}, "
+            f"Batch Vial #{vial_in_batch}"
         )
         self.last_overlay = {
             "image_path": overlay_path,
@@ -707,85 +563,97 @@ class LineController:
         """Full supervisory cycle for one vial position on the line."""
         print(f"\n>>> [LINE EVENT] Vial approaching Station 3: Recipe {recipe_id}, Batch Vial #{vial_in_batch}")
 
-        # Optional Step 1: Pre-Fill Predictive Check
         if enable_pre_fill_guard:
             pre_eval = self.pre_fill_check(recipe_id, prev_recipe_id, vial_in_batch)
             if pre_eval["action"] == "PAUSE_BEFORE_FILL":
-                self.plc.emergency_stop(fault_code=301, reason=pre_eval["detail"])
-                self._print_pre_fill_halt_banner(recipe_id, prev_recipe_id, vial_in_batch, pre_eval["detail"])
-                return "PRE_FILL_HALT"
+                self._print_predictive_report(
+                    recipe_id, prev_recipe_id, vial_in_batch, pre_eval["detail"]
+                )
+                return "PREDICTIVE_RISK_REPORTED"
 
-        # Step 2: Liquid Dispense & Post-Fill Camera Inspection
         action, diagnostic = self.inspect_vial_image(
             image_path, recipe_id, prev_recipe_id, vial_in_batch, row_data=row_data
         )
 
-        # Step 3: Actuate Machine Interlocks
-        if action == "STOP_MACHINE":
-            self.plc.emergency_stop(fault_code=402, reason="Fluid Contamination Detected")
-            self._print_emergency_stop_banner(diagnostic)
-            return "POST_FILL_STOP"
-        else:
-            # Write permissive high to let MagneMover advance
-            self.plc.write_tag("Station3_Dispense_Permissive", True)
-            self.plc.write_tag("MagneMover_Infeed_Active", True)
-            print(f"[PLC TAG: Line_Running={self.plc.read_tag('Line_Running')}] PASS: Inspection verified. MagneMover advancing cart.")
-            return "CONTINUE"
+        if action == "REPORT_ATTENTION":
+            self._print_contamination_report(diagnostic)
+            return "CONTAMINATION_REPORTED"
 
-    def _print_emergency_stop_banner(self, diagnostic):
+        for line in diagnostic.strip().split("\n"):
+            print(f"  {line}")
+        return "CONTINUE"
+
+    @staticmethod
+    def _print_contamination_report(diagnostic):
         print("\n" + "=" * 76)
-        print("  🚨 [ROCKWELL AUTOMATION INTERLOCK] EMERGENCY MACHINE STOP ACTIVATED 🚨")
+        print("  ⚠️  [CONTAMINATION DETECTION REPORT] OPERATOR ATTENTION REQUIRED ⚠️")
         print("=" * 76)
         for line in diagnostic.strip().split("\n"):
             print(f"  {line}")
-        print("=" * 76)
-        print(f"  PLC STATUS: Line_Running={self.plc.read_tag('Line_Running')} | E_Stop={self.plc.read_tag('Alarm_E_Stop')} | Flush_Req={self.plc.read_tag('Flush_Cycle_Required')}")
+        print("-" * 76)
+        print("  OUTPUT MODE: Advisory report only; no machine-control command was issued.")
         print("=" * 76 + "\n")
 
-    def _print_pre_fill_halt_banner(self, recipe_id, prev_recipe_id, vial_in_batch, detail):
+    @staticmethod
+    def _print_predictive_report(recipe_id, prev_recipe_id, vial_in_batch, detail):
         print("\n" + "=" * 76)
-        print("  🛑 [PREDICTIVE GUARD INTERLOCK] PRE-FILL MACHINE PAUSE ACTIVATED 🛑")
+        print("  ⚠️  [PREDICTIVE CARRYOVER RISK REPORT] OPERATOR ATTENTION REQUIRED ⚠️")
         print("=" * 76)
-        print(f"  Target Recipe: Recipe {recipe_id} | Previous Recipe: Recipe {prev_recipe_id}")
-        print(f"  Vial:          Vial {vial_in_batch} of batch (unfilled)")
-        print(f"  Prediction:    {detail}")
-        print("  Action Taken:  Dispense head locked. Machine paused to purge manifold.")
-        print("  Raw Materials: Saved (No vial or chemicals wasted).")
+        print(f"  Target Recipe:   Recipe {recipe_id}")
+        print(f"  Previous Recipe: Recipe {prev_recipe_id}")
+        print(f"  Vial:            Vial {vial_in_batch} of batch")
+        print(f"  Prediction:      {detail}")
+        print("  Recommendation:  Pause before filling and flush the nozzle/manifold.")
+        print("-" * 76)
+        print("  OUTPUT MODE: Advisory report only; no machine-control command was issued.")
         print("=" * 76 + "\n")
 
 
-def run_live_line_monitor(controller, image_dir="", poll_interval=0.1, enable_pre_fill_guard=False):
+def _capture_sequence(path):
+    """Return the numeric sequence from vial_000001.png, or None."""
+    match = re.search(r"vial_(\d+)\.(?:png|jpe?g)$", os.path.basename(path), re.I)
+    return int(match.group(1)) if match else None
+
+
+def run_live_camera_monitor(
+    controller,
+    image_dir,
+    recipe_id,
+    prev_recipe_id=0,
+    poll_interval=0.1,
+    enable_pre_fill_guard=False,
+    process_existing=False,
+):
+    """Watch frames from live_vial_capture.py and print advisory assessments.
+
+    Recipe context is supplied by the caller until a user interface is connected.
+    No machine-control interface is used.
     """
-    Continuous event loop for physical deployment on the UWM Connected Systems Institute (CSI) line.
-    Runs the predictive guard on cart arrival, then runs reactive visual
-    inspection after departure, when live_vial_capture.py has saved the final
-    fully filled frame.
-    """
+    os.makedirs(image_dir, exist_ok=True)
+
+    def image_files():
+        return sorted(
+            os.path.join(image_dir, name)
+            for name in os.listdir(image_dir)
+            if name.lower().endswith((".png", ".jpg", ".jpeg"))
+        )
+
+    seen = set() if process_existing else set(image_files())
+    fallback_sequence = len(seen)
+
     print("\n" + "#" * 70)
-    print("  🚀 [LIVE PHYSICAL MONITOR] ACTIVE ON ROCKWELL AUTOMATION CSI LINE 🚀")
-    print(f"  Connected to PLC: {controller.plc.plc_ip or 'Local Simulated Driver'}")
-    print("  Watching Tag: Station3_Cart_In_Position")
+    print("  [LIVE CAMERA MONITOR] ADVISORY REPORTING ACTIVE")
+    print(f"  Watching: {image_dir}")
+    print(f"  Recipe context: previous={prev_recipe_id}, current={recipe_id}")
+    print("  No machine-control connection is enabled.")
     print("#" * 70 + "\n")
 
-    last_cart_state = False
-    vials_processed = 0
-    pending = None
-
-    def latest_image_newer_than(minimum_mtime, timeout_s=2.0):
-        """Wait briefly for the capture process's atomic post-departure image."""
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() <= deadline:
-            if image_dir and os.path.isdir(image_dir):
-                files = [
-                    os.path.join(image_dir, name)
-                    for name in os.listdir(image_dir)
-                    if name.lower().endswith((".png", ".jpg", ".jpeg"))
-                ]
-                newer = [path for path in files if os.path.getmtime(path) > minimum_mtime]
-                if newer:
-                    return max(newer, key=os.path.getmtime)
-            time.sleep(0.05)
-        return ""
+    if enable_pre_fill_guard:
+        pre_eval = controller.pre_fill_check(recipe_id, prev_recipe_id, 1)
+        if pre_eval["action"] == "PAUSE_BEFORE_FILL":
+            controller._print_predictive_report(
+                recipe_id, prev_recipe_id, 1, pre_eval["detail"]
+            )
 
     try:
         while True:
@@ -846,114 +714,128 @@ def run_live_line_monitor(controller, image_dir="", poll_interval=0.1, enable_pr
             last_cart_state = cart_in_position
             time.sleep(poll_interval)
     except KeyboardInterrupt:
-        print("\n[INFO] Live monitoring terminated by operator.")
-    finally:
-        controller.plc.close()
+        print("\n[INFO] Live camera monitoring stopped by operator.")
 
 
-def simulate_production_run(plan_csv, img_root="", plc_ip=None, plc_slot=0, custom_tags=None, mock=True, base_model="", adapter="", enable_pre_fill_guard=False, hf_adapter="", hf_repo=HF_REPO):
-    """Simulates a sequence of production vials through Station 3."""
+
+def simulate_production_run(
+    plan_csv,
+    img_root="",
+    mock=True,
+    base_model="",
+    adapter="",
+    enable_pre_fill_guard=False,
+    hf_adapter="",
+    hf_repo=HF_REPO,
+):
+    """Replay a planned vial sequence and print advisory reports."""
     controller = LineController(
         base_model=base_model,
         adapter_path=adapter,
-        plc_ip=plc_ip,
-        plc_slot=plc_slot,
-        custom_tags=custom_tags,
         mock=mock,
         hf_adapter=hf_adapter,
         hf_repo=hf_repo,
     )
-    with open(plan_csv, newline="") as f:
-        rows = list(csv.DictReader(f))
+    with open(plan_csv, newline="") as handle:
+        rows = list(csv.DictReader(handle))
 
-    print(f"\nStarting line simulation for {len(rows)} planned vials...")
-    stops_triggered = 0
+    print(f"\nStarting advisory replay for {len(rows)} planned vials...")
+    reports_generated = 0
 
-    for i, r in enumerate(rows):
-        rid = int(r["recipe_id"])
-        prev = int(r.get("prev_recipe_id") or 0)
-        vial = int(r.get("vial_in_batch") or 1)
-        img_name = r.get("image", "")
-        img_path = os.path.join(img_root, img_name) if img_root else img_name
+    for row in rows:
+        recipe_id = int(row["recipe_id"])
+        prev_recipe_id = int(row.get("prev_recipe_id") or 0)
+        vial_in_batch = int(row.get("vial_in_batch") or 1)
+        image_name = row.get("image", "")
+        image_path = os.path.join(img_root, image_name) if img_root else image_name
 
         status = controller.process_vial(
-            image_path=img_path,
-            recipe_id=rid,
-            prev_recipe_id=prev,
-            vial_in_batch=vial,
-            row_data=r,
+            image_path=image_path,
+            recipe_id=recipe_id,
+            prev_recipe_id=prev_recipe_id,
+            vial_in_batch=vial_in_batch,
+            row_data=row,
             enable_pre_fill_guard=enable_pre_fill_guard,
         )
-
-        if status in ("POST_FILL_STOP", "PRE_FILL_HALT"):
-            stops_triggered += 1
-            print(">>> [OPERATOR OVERRIDE] Simulating line purge & resetting PLC interlocks...")
-            controller.plc.reset_and_flush()
-            time.sleep(0.05)  # Short pause for clean console output
+        if status in {"CONTAMINATION_REPORTED", "PREDICTIVE_RISK_REPORTED"}:
+            reports_generated += 1
 
     print("\n" + "#" * 60)
-    print(f"Simulation completed: {len(rows)} vials processed.")
-    print(f"Total machine stops triggered & resolved: {stops_triggered}")
+    print(f"Replay completed: {len(rows)} vials processed.")
+    print(f"Operator-attention reports generated: {reports_generated}")
+    print("No machine-control commands were issued.")
     print("#" * 60)
-    controller.plc.close()
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Station 3 Rockwell Automation Line Controller & Safety Interlock")
+    ap = argparse.ArgumentParser(
+        description="Station 3 AI contamination assessment and operator reporting"
+    )
     ap.add_argument("--plan", help="path to plan.csv or labels.csv")
     ap.add_argument("--img-root", default="", help="folder containing rendered images")
     ap.add_argument("--image", help="single image to inspect")
     ap.add_argument("--recipe", type=int, help="current recipe id")
     ap.add_argument("--prev", type=int, default=0, help="previous recipe id")
     ap.add_argument("--vial", type=int, default=1, help="vial in batch (1, 2, or 3)")
-    ap.add_argument("--base", default="", help="Cosmos 3 base repo/path (default: PourSightAI/CosmosReason3Hackathon, subfolder cosmos3-nano)")
-    ap.add_argument("--adapter", default="", help="path to a LOCAL trained LoRA adapter folder")
-    ap.add_argument("--hf-adapter", default="", help="adapter subfolder in the Hugging Face repo (use original_v2 for the trained v2 model)")
-    ap.add_argument("--hf-repo", default=HF_REPO, help="Hugging Face repo holding the adapters")
-    ap.add_argument("--mock", action="store_true", help="run simulation mode without GPU")
-    ap.add_argument("--predictive", action="store_true", help="enable pre-fill predictive prevention")
-
-    # EtherNet/IP Industrial Hardware Flags
-    ap.add_argument("--plc-ip", default="", help="IP address of physical Allen-Bradley PLC (e.g. 192.168.1.10)")
-    ap.add_argument("--plc-slot", type=int, default=0, help="Processor slot in 1756 ControlLogix chassis (default 0)")
-    ap.add_argument("--plc-tags", default="", help="JSON file mapping custom Studio 5000 tag names")
-    ap.add_argument("--live", action="store_true", help="run continuous real-time monitor for physical CSI line")
-    ap.add_argument("--image-dir", default="", help="camera capture inbox folder to watch in live mode")
+    ap.add_argument(
+        "--base",
+        default="",
+        help="Cosmos 3 base repo/path (default: PourSightAI/CosmosReason3Hackathon)",
+    )
+    ap.add_argument("--adapter", default="", help="local trained LoRA adapter folder")
+    ap.add_argument(
+        "--hf-adapter",
+        default="",
+        help="adapter subfolder in Hugging Face (use original_v2 for v2)",
+    )
+    ap.add_argument("--hf-repo", default=HF_REPO)
+    ap.add_argument("--mock", action="store_true", help="run without the GPU model")
+    ap.add_argument(
+        "--predictive",
+        action="store_true",
+        help="print predictive recipe-transition risk reports",
+    )
+    ap.add_argument(
+        "--live",
+        action="store_true",
+        help="watch a live_vial_capture.py output directory",
+    )
+    ap.add_argument("--image-dir", default="", help="camera capture directory")
+    ap.add_argument(
+        "--process-existing",
+        action="store_true",
+        help="process images already present when live monitoring starts",
+    )
     args = ap.parse_args()
 
-    # Real model whenever --mock is NOT set and an adapter or base model was requested.
     use_model = (not args.mock) and bool(args.hf_adapter or args.adapter or args.base)
     if not args.mock and not use_model:
-        print("[INFO] No --hf-adapter/--adapter/--base given: running in MOCK mode (no AI model).")
-
-    custom_tags = None
-    if args.plc_tags and os.path.isfile(args.plc_tags):
-        with open(args.plc_tags) as f:
-            custom_tags = json.load(f)
+        print("[INFO] No model or adapter given: running in mock mode.")
 
     if args.live:
+        if not args.image_dir:
+            ap.error("--live requires --image-dir")
+        if args.recipe is None:
+            ap.error("--live requires --recipe until a UI provides recipe context")
         controller = LineController(
             base_model=args.base,
             adapter_path=args.adapter,
             hf_adapter=args.hf_adapter,
             hf_repo=args.hf_repo,
-            plc_ip=args.plc_ip,
-            plc_slot=args.plc_slot,
-            custom_tags=custom_tags,
             mock=not use_model,
         )
-        run_live_line_monitor(
+        run_live_camera_monitor(
             controller=controller,
             image_dir=args.image_dir,
+            recipe_id=args.recipe,
+            prev_recipe_id=args.prev,
             enable_pre_fill_guard=args.predictive,
+            process_existing=args.process_existing,
         )
     elif args.plan:
         simulate_production_run(
             plan_csv=args.plan,
             img_root=args.img_root,
-            plc_ip=args.plc_ip,
-            plc_slot=args.plc_slot,
-            custom_tags=custom_tags,
             mock=not use_model,
             base_model=args.base,
             adapter=args.adapter,
@@ -961,15 +843,12 @@ if __name__ == "__main__":
             hf_repo=args.hf_repo,
             enable_pre_fill_guard=args.predictive,
         )
-    elif args.image and args.recipe:
+    elif args.image and args.recipe is not None:
         controller = LineController(
             base_model=args.base,
             adapter_path=args.adapter,
             hf_adapter=args.hf_adapter,
             hf_repo=args.hf_repo,
-            plc_ip=args.plc_ip,
-            plc_slot=args.plc_slot,
-            custom_tags=custom_tags,
             mock=not use_model,
         )
         controller.process_vial(
@@ -979,13 +858,11 @@ if __name__ == "__main__":
             vial_in_batch=args.vial,
             enable_pre_fill_guard=args.predictive,
         )
-        controller.plc.close()
     else:
-        # Default quick demo if no arguments provided
         default_plan = os.path.join(REPO_ROOT, "twin_data", "demo_out", "plan.csv")
         if os.path.exists(default_plan):
-            print("[INFO] No arguments given. Running demo simulation on plan.csv...")
-            simulate_production_run(default_plan, mock=True, enable_pre_fill_guard=False)
+            print("[INFO] No arguments given. Running the mock advisory demo...")
+            simulate_production_run(default_plan, mock=True)
         else:
             ap.print_help()
 
