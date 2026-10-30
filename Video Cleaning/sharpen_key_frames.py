@@ -124,6 +124,14 @@ for vid, group in keys.groupby("video_id"):
     print(f"video {vid}: {len(group)} key frames sharpened")
 
 res = pd.DataFrame(results)
+res = res.sort_values("Sequence number").reset_index(drop=True)
+# Handoff metadata for the Cosmos 3 v2 adapter. The model consumes twelve
+# chronological full frames and assesses the first vial after vial 3 arrives.
+res["vial_in_batch"] = ((res["Sequence number"] - 1) % 3) + 1
+res["batch_number"] = ((res["Sequence number"] - 1) // 3) + 1
+res["v2_assessment_ready"] = (
+    (res["Sequence number"] >= 12) & (res["vial_in_batch"] == 3)
+)
 res.to_csv("key_frames_sharp.csv", index=False)
 
 # contact sheet, zoomed on the vial
@@ -143,3 +151,4 @@ print(f"\nSharpness (higher = clearer): median {res['sharpness_before'].median()
       f"{res['sharpness_after'].median():.0f}, lowest {res['sharpness_before'].min():.0f} -> "
       f"{res['sharpness_after'].min():.0f}")
 print("Saved: key_frames_sharp/ , key_frames_zoom/ , key_frames_sharp.csv , key_frames_sharp_check.jpg")
+
