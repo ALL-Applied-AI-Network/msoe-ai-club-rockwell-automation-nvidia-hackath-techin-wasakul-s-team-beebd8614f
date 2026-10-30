@@ -24,7 +24,6 @@ How it works (640x480 vial_fill camera, fixed position):
      The frame before the change is the key frame.
      (If the spot was empty before, the change is just a carrier arriving.)
 """
-import shutil
 import sys
 from pathlib import Path
 
@@ -48,6 +47,14 @@ HOLDER_MOVED = 6  # avg pixel change in MOVE_BOX above this = holder moved
 def crop(img, box):
     x1, y1, x2, y2 = box
     return img[y1:y2, x1:x2]
+
+
+def format_capture_timestamp(seconds):
+    total_ms = int(round(float(seconds) * 1000))
+    h, rem = divmod(total_ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
 idx = pd.read_csv(f"{CAM}/image_index.csv")
@@ -105,14 +112,16 @@ keys = pd.DataFrame(keys)
 keys = keys.sort_values(["video_id", "video_s"]).reset_index(drop=True)
 keys["vial_in_video"] = keys.groupby("video_id").cumcount() + 1
 keys["chronological_order"] = keys.index + 1
+keys["Sequence number"] = keys["chronological_order"].astype(int)
+keys["Image"] = keys["Sequence number"].apply(lambda n: f"vial_{n:06d}.png")
+keys["Capture timestamp"] = keys["video_s"].apply(format_capture_timestamp)
+keys["Previous image"] = keys["Image"].shift(1).fillna("")
 keys.to_csv(f"key_frames{TAG}.csv", index=False)
 
 out = Path(f"key_frames{TAG}")
 out.mkdir(exist_ok=True)
 for _, r in keys.iterrows():
-    order = f"{int(r['chronological_order']):03d}"
-    shutil.copy(f"{CAM}/images/{r['filename']}",
-                out / f"{order}_v{r['video_id']}_vial{r['vial_in_video']:02d}_{r['filename']}")
+    Image.open(f"{CAM}/images/{r['filename']}").save(out / r["Image"], format="PNG")
 
 # contact sheet to eyeball the results
 cols, w, h = 8, 160, 120
@@ -122,7 +131,7 @@ for n, (_, r) in enumerate(keys.iterrows()):
     im = Image.open(f"{CAM}/images/{r['filename']}").resize((w, h))
     d = ImageDraw.Draw(im)
     d.rectangle([0, 0, 80, 12], fill="black")
-    d.text((2, 1), f"#{r['chronological_order']} v{r['video_id']}", fill="yellow")
+    d.text((2, 1), f"#{r['Sequence number']} v{r['video_id']}", fill="yellow")
     sheet.paste(im, ((n % cols) * w, (n // cols) * h))
 sheet.save(f"key_frames{TAG}_check.jpg")
 
