@@ -3,7 +3,7 @@ Comprehensive Automated Test Suite for Fluid Mixing Station 3
 Tests:
   1. Recipe configuration & volume validation.
   2. Training script build_example format & absence of hardcoded colors.
-  3. Rockwell Automation PLC state machine & interlock logic.
+  3. Advisory contamination and predictive-risk report formatting.
   4. Pre-fill predictive Beer-Lambert prevention logic.
   5. End-to-end evaluation on real CSI line video data (data/real_test_labels.csv).
 
@@ -13,8 +13,10 @@ Usage:
 
 import ast
 import csv
+import io
 import os
 import sys
+from contextlib import redirect_stdout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
@@ -100,35 +102,42 @@ def test_training_script_formatting():
     )
 
 
-def test_rockwell_plc_interlocks():
-    print("\n--- 3. Testing Rockwell Automation PLC Tag State Machine & EtherNet/IP Driver ---")
-    plc = LC.RockwellPLCInterlock()
-    record("PLC starts with Line_Running=True", plc.read_tag("Line_Running") is True)
-    record("PLC starts with Station3_Dispense_Permissive=True", plc.read_tag("Station3_Dispense_Permissive") is True)
-    record("PLC starts with Alarm_E_Stop=False", plc.read_tag("Alarm_E_Stop") is False)
+def test_advisory_reports():
+    print("\n--- 3. Testing Advisory Operator Reports ---")
+    controller = LC.LineController(mock=True)
 
-    # Trip E-Stop
-    plc.emergency_stop(fault_code=402, reason="Contamination Detected")
-    record("E-Stop trips Line_Running to False", plc.read_tag("Line_Running") is False)
-    record("E-Stop drops Station3_Dispense_Permissive", plc.read_tag("Station3_Dispense_Permissive") is False)
-    record("E-Stop activates Alarm_E_Stop=True", plc.read_tag("Alarm_E_Stop") is True)
-    record("E-Stop requires Flush_Cycle_Required=True", plc.read_tag("Flush_Cycle_Required") is True)
-    record("E-Stop sets Fault_Code=402", plc.read_tag("Fault_Code") == 402)
+    reactive_output = io.StringIO()
+    with redirect_stdout(reactive_output):
+        reactive_status = controller.process_vial(
+            image_path="mock_contaminated.png",
+            recipe_id=7,
+            prev_recipe_id=6,
+            vial_in_batch=1,
+            row_data={"contaminated": "1", "observed_color": "unexpected mixed color"},
+        )
+    reactive_text = reactive_output.getvalue()
+    record("Reactive detection reports contamination", reactive_status == "CONTAMINATION_REPORTED")
+    record("Reactive report requests a nozzle flush", "flush the nozzle" in reactive_text)
+    record("Reactive report declares advisory-only output", "no machine-control command was issued" in reactive_text)
 
-    # Operator reset
-    plc.reset_and_flush()
-    record("Flush cycle clears Alarm_E_Stop", plc.read_tag("Alarm_E_Stop") is False)
-    record("Flush cycle restores Line_Running=True", plc.read_tag("Line_Running") is True)
-
-    # Custom tag mapping test (EtherNet/IP Studio 5000 custom tags)
-    custom = {"Station3_Dispense_Permissive": "CSI_Mixing_Permissive"}
-    plc_custom = LC.RockwellPLCInterlock(custom_tags=custom)
-    record("Custom tag mapping overrides default tag names", plc_custom.tag_map["Station3_Dispense_Permissive"] == "CSI_Mixing_Permissive")
-    record("Flush cycle restores Line_Running=True", plc.tags["Line_Running"] is True)
+    predictive_output = io.StringIO()
+    with redirect_stdout(predictive_output):
+        predictive_status = controller.process_vial(
+            image_path="unused.png",
+            recipe_id=7,
+            prev_recipe_id=6,
+            vial_in_batch=1,
+            row_data={"contaminated": "0"},
+            enable_pre_fill_guard=True,
+        )
+    predictive_text = predictive_output.getvalue()
+    record("Predictive risk produces a report", predictive_status == "PREDICTIVE_RISK_REPORTED")
+    record("Predictive report recommends pausing before fill", "Pause before filling" in predictive_text)
+    record("Predictive report declares advisory-only output", "no machine-control command was issued" in predictive_text)
 
 
 def test_predictive_pre_fill_guard():
-    print("\n--- 4. Testing Pre-Fill Predictive Beer-Lambert Interlocks ---")
+    print("\n--- 4. Testing Pre-Fill Predictive Beer-Lambert Reporting ---")
     ctrl = LC.LineController(mock=True)
 
     # Safe transition (Vials 2 or 3, or same recipe)
@@ -173,7 +182,7 @@ def test_real_dataset():
             vial_in_batch=int(r["vial_in_batch"]),
             row_data=r,
         )
-        expected_action = "STOP_MACHINE" if int(r["contaminated"]) else "CONTINUE"
+        expected_action = "REPORT_ATTENTION" if int(r["contaminated"]) else "CONTINUE"
         if action == expected_action:
             correct_actions += 1
 
@@ -188,7 +197,7 @@ def run_all():
     global PASSED, FAILED
     test_recipes()
     test_training_script_formatting()
-    test_rockwell_plc_interlocks()
+    test_advisory_reports()
     test_predictive_pre_fill_guard()
     test_real_dataset()
 
@@ -201,4 +210,5 @@ def run_all():
 if __name__ == "__main__":
     success = run_all()
     sys.exit(0 if success else 1)
+
 
