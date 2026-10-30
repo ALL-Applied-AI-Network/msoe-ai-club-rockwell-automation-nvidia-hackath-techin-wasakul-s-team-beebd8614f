@@ -1,0 +1,751 @@
+[
+  {
+    "run": "3",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "6",
+    "vial_index": 10,
+    "actual": 0,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "6",
+    "vial_index": 13,
+    "actual": 0,
+    "predicted": 0,
+    "generated_text": "{\"assessment\":\"no_clear_carryover_signal\"}"
+  },
+  {
+    "run": "16",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "16",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "27",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "27",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "27",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "34",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "36",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "36",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "37",
+    "vial_index": 10,
+    "actual": 0,
+    "predicted": 0,
+    "generated_text": "{\"assessment\":\"no_clear_carryover_signal\"}"
+  },
+  {
+    "run": "38",
+    "vial_index": 10,
+    "actual": 0,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "38",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "40",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "40",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "45",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "45",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "45",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "48",
+    "vial_index": 10,
+    "actual": 0,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "48",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "56",
+    "vial_index": 10,
+    "actual": 0,
+    "predicted": 0,
+    "generated_text": "{\"assessment\":\"no_clear_carryover_signal\"}"
+  },
+  {
+    "run": "56",
+    "vial_index": 13,
+    "actual": 0,
+    "predicted": 0,
+    "generated_text": "{\"assessment\":\"no_clear_carryover_signal\"}"
+  },
+  {
+    "run": "57",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "63",
+    "vial_index": 10,
+    "actual": 0,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "63",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "63",
+    "vial_index": 16,
+    "actual": 0,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "67",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "67",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "67",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "75",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "79",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "79",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "79",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "90",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "90",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "92",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "94",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "96",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "96",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "105",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "105",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "105",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "106",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "110",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "135",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "135",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "137",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 0,
+    "generated_text": "{\"assessment\":\"no_clear_carryover_signal\"}"
+  },
+  {
+    "run": "137",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "148",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "151",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "151",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "151",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "156",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "170",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "170",
+    "vial_index": 13,
+    "actual": 0,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "170",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "176",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "176",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "186",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "186",
+    "vial_index": 13,
+    "actual": 0,
+    "predicted": 0,
+    "generated_text": "{\"assessment\":\"no_clear_carryover_signal\"}"
+  },
+  {
+    "run": "190",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "190",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "193",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "193",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "197",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "197",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "200",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "200",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "200",
+    "vial_index": 16,
+    "actual": 0,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "204",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "224",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "224",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "224",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "226",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "226",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "226",
+    "vial_index": 16,
+    "actual": 0,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "237",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 0,
+    "generated_text": "{\"assessment\":\"no_clear_carryover_signal\"}"
+  },
+  {
+    "run": "245",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "246",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "246",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "254",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "257",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "257",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "257",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "262",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "262",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "277",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "277",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "285",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "285",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "285",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "306",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "306",
+    "vial_index": 13,
+    "actual": 0,
+    "predicted": 0,
+    "generated_text": "{\"assessment\":\"no_clear_carryover_signal\"}"
+  },
+  {
+    "run": "336",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "348",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "350",
+    "vial_index": 10,
+    "actual": 0,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "350",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "350",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "354",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "355",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "355",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "355",
+    "vial_index": 16,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "358",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "358",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "365",
+    "vial_index": 10,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  },
+  {
+    "run": "365",
+    "vial_index": 13,
+    "actual": 1,
+    "predicted": 1,
+    "generated_text": "{\"assessment\":\"potential_carryover\"}"
+  }
+]
