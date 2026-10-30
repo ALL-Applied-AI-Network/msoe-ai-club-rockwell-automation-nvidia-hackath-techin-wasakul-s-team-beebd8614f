@@ -68,9 +68,9 @@ visually match both in color and fill level before that evidence can refute susp
 Focus on strong visual evidence; ambiguous cases should remain uncertain.
 
 Return only this JSON object, with no markdown:
-{\"assessment\":\"potential_carryover\"}
+{"assessment":"potential_carryover"}
 or
-{\"assessment\":\"no_clear_carryover_signal\"}
+{"assessment":"no_clear_carryover_signal"}
 """
 
 # Attempt EtherNet/IP driver import (pylogix)
@@ -311,6 +311,7 @@ class LineController:
         # 9 earlier images followed by all 3 images in the current batch.
         self.image_history = deque(maxlen=12)
         self.vial_position_history = deque(maxlen=12)
+        self.last_overlay = None
 
         if not mock:
             # Resolve (and download if needed) BEFORE touching the GPU, so a bad run name fails fast.
@@ -351,7 +352,7 @@ class LineController:
         except json.JSONDecodeError:
             # Keep a narrow recovery path for a model that adds surrounding text,
             # but still require a valid JSON object and an exact known label.
-            match = re.search(r'\{\s*"assessment"\s*:\s*"[^"}]+"\s*\}', text)
+            match = re.search(r'\{\s*"assessment"\s*:\s*"[^"]+"\s*\}', text)
             if not match:
                 return None
             try:
@@ -380,7 +381,7 @@ class LineController:
             content.append({"type": "image", "image": image})
 
         content.append({"type": "text", "text": "CURRENT RECIPE BATCH"})
-        for index, path in enumerate(image_paths[9:]):
+        for index, path in enumerate(image_paths[9:], 1):
             with Image.open(path) as source:
                 image = source.convert("RGB")
             label = (
@@ -392,11 +393,66 @@ class LineController:
             content.append({"type": "image", "image": image})
         return [{"role": "user", "content": content}]
 
-    def _run_v2_inference(self, image_paths):
-        """Run the fine-tuned adapter and return (assessment, raw model text)."""
+    @staticmethod
+    def _build_v2_messages_for_target(image_paths, target_index):
+        """Build a visual-only sequence prompt using the selected target image and surrounding context.
+
+        Target selection is intentionally blind to recipe metadata. The model is shown only a
+        chronological visual sequence with the target frame at images[-3] and the two later frames
+        as nearby reference evidence, so it judges based on appearance rather than manufacturing info.
+        """
+        from PIL import Image
+
+        if len(image_paths) < 3:
+            raise ValueError(f"At least 3 images are required, got {len(image_paths)}")
+        if not (0 <= target_index < len(image_paths)):
+            raise ValueError(f"target_index out of range: {target_index} for {len(image_paths)} images")
+
+        history = image_paths[:target_index]
+        target_path = image_paths[target_index]
+        later_refs = image_paths[target_index + 1:]
+
+        content = [{
+            "type": "text",
+            "text": (
+                "Review this chronological image sequence. One frame is the candidate under review. "
+                "Use the earlier frames as historical context and the immediately following frames as nearby reference. "
+                "Do not use recipe numbers, previous recipe values, batch labels, or plant metadata. "
+                "Base your decision only on visual evidence in the sequence."
+            )
+        }]
+
+        for index, path in enumerate(history[-9:], 1):
+            with Image.open(path) as source:
+                image = source.convert("RGB")
+            content.append({"type": "text", "text": f"Earlier chronological image {index}"})
+            content.append({"type": "image", "image": image})
+
+        with Image.open(target_path) as source:
+            target_image = source.convert("RGB")
+        content.append({"type": "text", "text": "Candidate image under review: target frame"})
+        content.append({"type": "image", "image": target_image})
+
+        for index, path in enumerate(later_refs[:2], 1):
+            with Image.open(path) as source:
+                image = source.convert("RGB")
+            content.append({"type": "text", "text": f"Nearby reference image {index}"})
+            content.append({"type": "image", "image": image})
+
+        return [{"role": "user", "content": content}]
+
+    def _run_v2_inference(self, image_paths, target_index=None):
+        """Run the fine-tuned adapter and return (assessment, raw model text).
+
+        Default target is two pictures ago, i.e. images[-3], so the AI judges the older frame while
+        still receiving previous and nearby reference context without recipe metadata.
+        """
         import torch
 
-        messages = self._build_v2_messages(image_paths)
+        if target_index is None:
+            target_index = len(image_paths) - 3 if len(image_paths) >= 3 else 0
+
+        messages = self._build_v2_messages_for_target(image_paths, target_index)
         inputs = self.processor.apply_chat_template(
             messages,
             tokenize=True,
@@ -416,6 +472,54 @@ class LineController:
             output[:, prompt_length:], skip_special_tokens=True
         )[0].strip()
         return self._parse_assessment(generated), generated
+
+    def render_overlay(self, image_path, action, diagnostic, recipe_id, prev_recipe_id, vial_in_batch):
+        """Overlay the AI judgement onto an older image for display."""
+        try:
+            import cv2
+        except ImportError as exc:
+            raise RuntimeError("OpenCV is required for live overlay display.") from exc
+
+        frame = cv2.imread(image_path)
+        if frame is None:
+            return None
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (10, 10), (700, 220), (20, 20, 20), -1)
+        frame = cv2.addWeighted(overlay, 0.65, frame, 0.35, 0)
+
+        color = (0, 255, 0) if action == "CONTINUE" else (0, 0, 255)
+        cv2.putText(frame, f"Recipe: {recipe_id}", (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(frame, f"Prev: {prev_recipe_id}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(frame, f"Vial: {vial_in_batch}", (20, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(frame, f"AI: {action}", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
+        y = 185
+        for line in diagnostic.splitlines()[:4]:
+            cv2.putText(frame, line[:60], (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+            y += 22
+        return frame
+
+    def display_last_overlay(self):
+        if not self.last_overlay:
+            return
+        info = self.last_overlay
+        frame = self.render_overlay(
+            info["image_path"],
+            info["action"],
+            info["diagnostic"],
+            info["recipe_id"],
+            info["prev_recipe_id"],
+            info["vial_in_batch"],
+        )
+        if frame is None:
+            return
+        try:
+            import cv2
+        except ImportError:
+            return
+        cv2.imshow("AI Judgement Overlay", frame)
+        cv2.waitKey(1)
 
     def pre_fill_check(self, recipe_id, prev_recipe_id, vial_in_batch):
         """
@@ -465,7 +569,7 @@ class LineController:
         POST-FILL DETECTION:
         Buffers the chronological camera stream and, at the end of a batch, runs
         v2 VLM inference over 9 earlier images plus all 3 current-batch images.
-        The trained target is the first vial of the current batch.
+        The trained target is the first vial of the current three-vial batch.
 
         Returns parsed action ('STOP_MACHINE' or 'CONTINUE') and an operator-safe
         diagnostic. Invalid model output fails safe and stops the line.
@@ -539,40 +643,49 @@ class LineController:
             )
             return "STOP_MACHINE", text
 
-        assessment, raw_output = self._run_v2_inference(list(self.image_history))
+        images = list(self.image_history)
+        target_index = len(images) - 3
+        assessment, raw_output = self._run_v2_inference(images, target_index=target_index)
+        overlay_path = images[target_index]
+
         if assessment == "potential_carryover":
-            prev_description = (
-                describe(prev_recipe_id)
-                if prev_recipe_id in RECIPES
-                else f"Recipe {prev_recipe_id}"
-            )
             text = (
                 "[ACTION: STOP_MACHINE]\n"
                 "ERROR: Potential Fluid Carryover Detected.\n"
-                f"- Recipe Being Filled: {describe(recipe_id)}\n"
-                "- Assessed Target: First vial of the current three-vial batch\n"
-                "- Visual Evidence: The first vial does not clearly match the later current-batch "
-                "reference vials when compared with the nine-image chronological history.\n"
-                f"- Likely Process Cause: Residual fluid from {prev_description} remained in the "
-                "shared dispensing nozzle/manifold.\n"
+                "- Assessed Target: The image two frames ago, evaluated with the surrounding visual history.\n"
+                "- Visual Evidence: The candidate frame does not clearly match the recent sequence and nearby reference views.\n"
+                "- Likely Process Cause: Residual fluid remained in the shared dispensing nozzle/manifold.\n"
                 "- Machine Directive: Line halted. Operator must flush the nozzle before resuming.\n"
                 f"- AI Assessment: {raw_output}"
             )
+            self.last_overlay = {
+                "image_path": overlay_path,
+                "action": "STOP_MACHINE",
+                "diagnostic": text,
+                "recipe_id": recipe_id,
+                "prev_recipe_id": prev_recipe_id,
+                "vial_in_batch": vial_in_batch,
+            }
             return "STOP_MACHINE", text
 
         if assessment == "no_clear_carryover_signal":
             text = (
                 "[ACTION: CONTINUE]\n"
                 "STATUS: No clear carryover signal.\n"
-                "- Assessed Target: First vial of the current three-vial batch\n"
-                "- Verification: The first vial is visually consistent with the current-batch "
-                "reference evidence.\n"
+                "- Assessed Target: The image two frames ago, evaluated with the surrounding visual history.\n"
+                "- Verification: The candidate frame is visually consistent with the recent and nearby reference evidence.\n"
                 f"- AI Assessment: {raw_output}"
             )
+            self.last_overlay = {
+                "image_path": overlay_path,
+                "action": "CONTINUE",
+                "diagnostic": text,
+                "recipe_id": recipe_id,
+                "prev_recipe_id": prev_recipe_id,
+                "vial_in_batch": vial_in_batch,
+            }
             return "CONTINUE", text
 
-        # Safety interlock policy: an output outside the trained JSON contract is
-        # not evidence that the vial is clean.
         text = (
             "[ACTION: STOP_MACHINE]\n"
             "ERROR: AI inspection returned an invalid or ambiguous response.\n"
@@ -580,6 +693,14 @@ class LineController:
             "- Machine Directive: Line halted fail-safe. Manually inspect the batch and flush the "
             "nozzle before resuming."
         )
+        self.last_overlay = {
+            "image_path": overlay_path,
+            "action": "STOP_MACHINE",
+            "diagnostic": text,
+            "recipe_id": recipe_id,
+            "prev_recipe_id": prev_recipe_id,
+            "vial_in_batch": vial_in_batch,
+        }
         return "STOP_MACHINE", text
 
     def process_vial(self, image_path, recipe_id, prev_recipe_id, vial_in_batch, row_data=None, enable_pre_fill_guard=False):
@@ -718,6 +839,7 @@ def run_live_line_monitor(controller, image_dir="", poll_interval=0.1, enable_pr
                         vial_in_batch=pending["vial_in_batch"],
                         enable_pre_fill_guard=False,
                     )
+                    controller.display_last_overlay()
                     controller.plc.write_tag("Inspection_Complete", True)
                 pending = None
 
