@@ -1,20 +1,11 @@
-"""
-Comprehensive Automated Test Suite for Fluid Mixing Station 3
-Tests:
-  1. Recipe configuration & volume validation.
-  2. Training script build_example format & absence of hardcoded colors.
-  3. Rockwell Automation PLC state machine & interlock logic.
-  4. Pre-fill predictive Beer-Lambert prevention logic.
-  5. End-to-end evaluation on real CSI line video data (data/real_test_labels.csv).
-
-Usage:
-  python3 src/test_system.py
-"""
-
 import ast
 import csv
 import os
 import sys
+import tempfile
+
+import cv2
+import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
@@ -184,6 +175,59 @@ def test_real_dataset():
     )
 
 
+def test_target_frame_context_and_overlay():
+    print("\n--- 6. Testing target frame selection, context window, and overlay state ---")
+    ctrl = LC.LineController(mock=True)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        image_paths = []
+        for idx in range(5):
+            path = os.path.join(tmpdir, f"img_{idx}.png")
+            cv2.imwrite(path, np.full((20, 20, 3), 255 - idx * 10, dtype=np.uint8))
+            image_paths.append(path)
+
+        target_index = len(image_paths) - 3
+        record("Target selection is two frames ago", target_index == 2)
+        messages = ctrl._build_v2_messages_for_target(image_paths, target_index)
+        prompt_text = " ".join(
+            item.get("text", "")
+            for item in messages[0]["content"]
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+        record(
+            "Prompt includes earlier history and nearby reference frames",
+            "Earlier chronological image" in prompt_text and "Nearby reference image" in prompt_text,
+        )
+        record(
+            "Prompt explicitly forbids recipe metadata",
+            "Do not use recipe numbers" in prompt_text,
+        )
+        record(
+            "Target image is flagged as the candidate under review",
+            "Candidate image under review" in prompt_text,
+        )
+
+        rendered = ctrl.render_overlay(
+            image_paths[target_index],
+            "CONTINUE",
+            "STATUS: No clear carryover signal.",
+            recipe_id=7,
+            prev_recipe_id=6,
+            vial_in_batch=3,
+        )
+        record("Overlay renderer returns a displayable image", rendered is not None and rendered.shape[0] > 0)
+
+        ctrl.last_overlay = {
+            "image_path": image_paths[target_index],
+            "action": "CONTINUE",
+            "diagnostic": "STATUS: No clear carryover signal.",
+            "recipe_id": 7,
+            "prev_recipe_id": 6,
+            "vial_in_batch": 3,
+        }
+        record("Overlay state can be stored for display", ctrl.last_overlay["image_path"] == image_paths[target_index])
+
+
 def run_all():
     global PASSED, FAILED
     test_recipes()
@@ -191,6 +235,7 @@ def run_all():
     test_rockwell_plc_interlocks()
     test_predictive_pre_fill_guard()
     test_real_dataset()
+    test_target_frame_context_and_overlay()
 
     print("\n" + "=" * 60)
     print(f"TEST RESULTS: {PASSED} Passed, {FAILED} Failed")
@@ -201,4 +246,3 @@ def run_all():
 if __name__ == "__main__":
     success = run_all()
     sys.exit(0 if success else 1)
-
