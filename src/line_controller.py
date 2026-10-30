@@ -17,6 +17,10 @@ Usage:
   # 2. Predictive pre-fill prevention mode:
   python3 src/line_controller.py --plan twin_data/demo_out/plan.csv --mock --predictive
 
+  # 2b. REAL TRAINED MODEL, adapter pulled from Hugging Face (needs GPU + torch/transformers/peft):
+  python3 src/line_controller.py --plan twin_data/demo_out/plan.csv --img-root <folder with images> \
+      --hf-adapter run-01
+
   # 3. PHYSICAL CSI LINE (EtherNet/IP to Rockwell PLC):
   python3 src/line_controller.py --plc-ip 192.168.1.10 --plc-slot 0 --live \
       --image-dir /path/to/camera_inbox --base /workspace/models/cosmos-reason \
@@ -33,6 +37,11 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
+
+# Where the trained LoRA adapters live (see models/README.md). Each training run is
+# uploaded to adapters/<run-name>/ and the learned weights are adapter_model.safetensors.
+HF_REPO = "PourSightAI/CosmosReason3Hackathon"
+HF_BASE_ID = "nvidia/Cosmos-Reason1-7B"
 
 # Attempt EtherNet/IP driver import (pylogix)
 try:
@@ -59,6 +68,37 @@ K_MATRIX = [
     [7.5434, 0.9629, -2.4204], # Tank 400 component
 ]
 EMPTY_VIAL_LINEAR = [0.07809, 0.08206, 0.05105]
+
+
+def resolve_adapter(adapter_path="", hf_adapter="", hf_repo=HF_REPO, cache_dir=None):
+    """
+    Returns a LOCAL folder containing adapter_model.safetensors + adapter_config.json.
+      - hf_adapter: run name, e.g. "run-01". Downloads adapters/<run>/ from the Hugging Face
+        repo (uses HF_TOKEN from the environment if the repo is private).
+      - adapter_path: an already-local adapter folder.
+    Raises (never silently falls back to the untrained base model).
+    """
+    if hf_adapter:
+        from huggingface_hub import snapshot_download
+        run = hf_adapter.strip("/").split("/")[-1]
+        print(f"[INIT] Downloading adapter 'adapters/{run}' from Hugging Face repo {hf_repo}...")
+        root = snapshot_download(
+            repo_id=hf_repo,
+            allow_patterns=[f"adapters/{run}/*"],
+            cache_dir=cache_dir,
+            token=os.environ.get("HF_TOKEN") or None,
+        )
+        adapter_path = os.path.join(root, "adapters", run)
+    if not adapter_path:
+        return ""
+    weights = os.path.join(adapter_path, "adapter_model.safetensors")
+    if not os.path.isfile(weights):
+        raise FileNotFoundError(
+            f"No adapter_model.safetensors in '{adapter_path}'. Check the run name / path "
+            f"(expected adapters/<run-name>/ in {hf_repo})."
+        )
+    print(f"[INIT] Adapter weights found: {weights}")
+    return adapter_path
 
 
 def describe(rid):
@@ -225,16 +265,19 @@ class RockwellPLCInterlock:
 
 
 class LineController:
-    def __init__(self, base_model=None, adapter_path=None, plc_ip=None, plc_slot=0, custom_tags=None, mock=False):
+    def __init__(self, base_model=None, adapter_path=None, plc_ip=None, plc_slot=0, custom_tags=None,
+                 mock=False, hf_adapter="", hf_repo=HF_REPO):
         self.plc = RockwellPLCInterlock(plc_ip=plc_ip, slot=plc_slot, custom_tags=custom_tags)
         self.mock = mock
         self.model = None
         self.processor = None
 
-        if not mock and base_model:
-            self._load_model(base_model, adapter_path)
+        if not mock:
+            # Resolve (and download if needed) BEFORE touching the GPU, so a bad run name fails fast.
+            adapter_dir = resolve_adapter(adapter_path or "", hf_adapter, hf_repo)
+            self._load_model(base_model or HF_BASE_ID, adapter_dir)
 
-    def _load_model(self, base_model, adapter_path):
+    def _load_model(self, base_model, adapter_dir):
         import torch
         from peft import PeftModel
         from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
@@ -244,11 +287,13 @@ class LineController:
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             base_model, torch_dtype=torch.bfloat16, device_map="cuda"
         )
-        if adapter_path and os.path.exists(adapter_path):
-            print(f"[INIT] Attaching fine-tuned LoRA adapter from {adapter_path}...")
-            self.model = PeftModel.from_pretrained(model, adapter_path)
+        if adapter_dir:
+            print(f"[INIT] Attaching fine-tuned LoRA adapter from {adapter_dir}...")
+            self.model = PeftModel.from_pretrained(model, adapter_dir)
+            print("[INIT] TRAINED adapter attached. Decisions come from the fine-tuned model.")
         else:
             self.model = model
+            print("[INIT] WARNING: no adapter given. Running the UNTRAINED base model.")
         self.model.eval()
         print("[INIT] Model successfully loaded onto GPU.")
 
@@ -463,7 +508,7 @@ def run_live_line_monitor(controller, image_dir="", poll_interval=0.1, enable_pr
         controller.plc.close()
 
 
-def simulate_production_run(plan_csv, img_root="", plc_ip=None, plc_slot=0, custom_tags=None, mock=True, base_model="", adapter="", enable_pre_fill_guard=False):
+def simulate_production_run(plan_csv, img_root="", plc_ip=None, plc_slot=0, custom_tags=None, mock=True, base_model="", adapter="", enable_pre_fill_guard=False, hf_adapter="", hf_repo=HF_REPO):
     """Simulates a sequence of production vials through Station 3."""
     controller = LineController(
         base_model=base_model,
@@ -472,6 +517,8 @@ def simulate_production_run(plan_csv, img_root="", plc_ip=None, plc_slot=0, cust
         plc_slot=plc_slot,
         custom_tags=custom_tags,
         mock=mock,
+        hf_adapter=hf_adapter,
+        hf_repo=hf_repo,
     )
     with open(plan_csv, newline="") as f:
         rows = list(csv.DictReader(f))
@@ -516,8 +563,10 @@ if __name__ == "__main__":
     ap.add_argument("--recipe", type=int, help="current recipe id")
     ap.add_argument("--prev", type=int, default=0, help="previous recipe id")
     ap.add_argument("--vial", type=int, default=1, help="vial in batch (1, 2, or 3)")
-    ap.add_argument("--base", default="", help="path to Cosmos Reason base model")
-    ap.add_argument("--adapter", default="", help="path to trained LoRA adapter")
+    ap.add_argument("--base", default="", help="Cosmos Reason base model path (default: download nvidia/Cosmos-Reason1-7B)")
+    ap.add_argument("--adapter", default="", help="path to a LOCAL trained LoRA adapter folder")
+    ap.add_argument("--hf-adapter", default="", help="run name to download from Hugging Face, e.g. run-01 (adapters/<run>/)")
+    ap.add_argument("--hf-repo", default=HF_REPO, help="Hugging Face repo holding the adapters")
     ap.add_argument("--mock", action="store_true", help="run simulation mode without GPU")
     ap.add_argument("--predictive", action="store_true", help="enable pre-fill predictive prevention")
 
@@ -529,6 +578,11 @@ if __name__ == "__main__":
     ap.add_argument("--image-dir", default="", help="camera capture inbox folder to watch in live mode")
     args = ap.parse_args()
 
+    # Real model whenever --mock is NOT set and an adapter or base model was requested.
+    use_model = (not args.mock) and bool(args.hf_adapter or args.adapter or args.base)
+    if not args.mock and not use_model:
+        print("[INFO] No --hf-adapter/--adapter/--base given: running in MOCK mode (no AI model).")
+
     custom_tags = None
     if args.plc_tags and os.path.isfile(args.plc_tags):
         with open(args.plc_tags) as f:
@@ -538,10 +592,12 @@ if __name__ == "__main__":
         controller = LineController(
             base_model=args.base,
             adapter_path=args.adapter,
+            hf_adapter=args.hf_adapter,
+            hf_repo=args.hf_repo,
             plc_ip=args.plc_ip,
             plc_slot=args.plc_slot,
             custom_tags=custom_tags,
-            mock=args.mock or not args.base,
+            mock=not use_model,
         )
         run_live_line_monitor(
             controller=controller,
@@ -555,19 +611,23 @@ if __name__ == "__main__":
             plc_ip=args.plc_ip,
             plc_slot=args.plc_slot,
             custom_tags=custom_tags,
-            mock=args.mock or not args.base,
+            mock=not use_model,
             base_model=args.base,
             adapter=args.adapter,
+            hf_adapter=args.hf_adapter,
+            hf_repo=args.hf_repo,
             enable_pre_fill_guard=args.predictive,
         )
     elif args.image and args.recipe:
         controller = LineController(
             base_model=args.base,
             adapter_path=args.adapter,
+            hf_adapter=args.hf_adapter,
+            hf_repo=args.hf_repo,
             plc_ip=args.plc_ip,
             plc_slot=args.plc_slot,
             custom_tags=custom_tags,
-            mock=args.mock or not args.base,
+            mock=not use_model,
         )
         controller.process_vial(
             image_path=args.image,
