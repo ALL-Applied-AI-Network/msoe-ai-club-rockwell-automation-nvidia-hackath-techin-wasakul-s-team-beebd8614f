@@ -636,8 +636,9 @@ class LineController:
 def run_live_line_monitor(controller, image_dir="", poll_interval=0.1, enable_pre_fill_guard=False):
     """
     Continuous event loop for physical deployment on the UWM Connected Systems Institute (CSI) line.
-    Polls the Allen-Bradley PLC over EtherNet/IP for cart arrival triggers, inspects the vial,
-    and updates machine interlocks in real time.
+    Runs the predictive guard on cart arrival, then runs reactive visual
+    inspection after departure, when live_vial_capture.py has saved the final
+    fully filled frame.
     """
     print("\n" + "#" * 70)
     print("  🚀 [LIVE PHYSICAL MONITOR] ACTIVE ON ROCKWELL AUTOMATION CSI LINE 🚀")
@@ -647,6 +648,23 @@ def run_live_line_monitor(controller, image_dir="", poll_interval=0.1, enable_pr
 
     last_cart_state = False
     vials_processed = 0
+    pending = None
+
+    def latest_image_newer_than(minimum_mtime, timeout_s=2.0):
+        """Wait briefly for the capture process's atomic post-departure image."""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() <= deadline:
+            if image_dir and os.path.isdir(image_dir):
+                files = [
+                    os.path.join(image_dir, name)
+                    for name in os.listdir(image_dir)
+                    if name.lower().endswith((".png", ".jpg", ".jpeg"))
+                ]
+                newer = [path for path in files if os.path.getmtime(path) > minimum_mtime]
+                if newer:
+                    return max(newer, key=os.path.getmtime)
+            time.sleep(0.05)
+        return ""
 
     try:
         while True:
@@ -662,32 +680,46 @@ def run_live_line_monitor(controller, image_dir="", poll_interval=0.1, enable_pr
                 rid = int(controller.plc.read_tag("Current_Recipe", 5))
                 prev = int(controller.plc.read_tag("Prev_Recipe", 0))
                 vial = int(controller.plc.read_tag("Vial_Number", 1))
+                existing_mtime = 0.0
+                if image_dir and os.path.isdir(image_dir):
+                    existing = [
+                        os.path.join(image_dir, name) for name in os.listdir(image_dir)
+                        if name.lower().endswith((".png", ".jpg", ".jpeg"))
+                    ]
+                    if existing:
+                        existing_mtime = max(os.path.getmtime(path) for path in existing)
+                pending = {
+                    "recipe_id": rid, "prev_recipe_id": prev,
+                    "vial_in_batch": vial, "image_baseline_mtime": existing_mtime,
+                    "predictive_halt": False,
+                }
+                controller.plc.write_tag("Inspection_Complete", False)
 
-                # Identify latest camera image
-                img_path = None
-                if image_dir and os.path.exists(image_dir):
-                    files = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
-                    if files:
-                        img_path = max(files, key=os.path.getmtime)  # Most recent image
-
-                if not img_path:
-                    img_path = "live_capture.png"
-
-                # Process the vial through the AI controller
-                status = controller.process_vial(
-                    image_path=img_path,
-                    recipe_id=rid,
-                    prev_recipe_id=prev,
-                    vial_in_batch=vial,
-                    enable_pre_fill_guard=enable_pre_fill_guard,
-                )
-
-                # Signal handshaking bit to PLC
-                controller.plc.write_tag("Inspection_Complete", True)
+                # Prediction must occur before dispensing; the camera assessment
+                # cannot occur until the final filled frame exists.
+                if enable_pre_fill_guard:
+                    pre_eval = controller.pre_fill_check(rid, prev, vial)
+                    if pre_eval["action"] == "PAUSE_BEFORE_FILL":
+                        controller.plc.emergency_stop(fault_code=301, reason=pre_eval["detail"])
+                        controller._print_pre_fill_halt_banner(rid, prev, vial, pre_eval["detail"])
+                        pending["predictive_halt"] = True
+                        controller.plc.write_tag("Inspection_Complete", True)
 
             elif not cart_in_position and last_cart_state:
-                # Cart departed Station 3: reset handshaking bit
-                controller.plc.write_tag("Inspection_Complete", False)
+                print("[EVENT] Cart departed Station 3; acquiring final filled-vial frame.")
+                if pending and not pending["predictive_halt"]:
+                    img_path = latest_image_newer_than(pending["image_baseline_mtime"])
+                    if not img_path:
+                        img_path = "live_capture.png"  # inspect_vial_image fails safe
+                    controller.process_vial(
+                        image_path=img_path,
+                        recipe_id=pending["recipe_id"],
+                        prev_recipe_id=pending["prev_recipe_id"],
+                        vial_in_batch=pending["vial_in_batch"],
+                        enable_pre_fill_guard=False,
+                    )
+                    controller.plc.write_tag("Inspection_Complete", True)
+                pending = None
 
             last_cart_state = cart_in_position
             time.sleep(poll_interval)
