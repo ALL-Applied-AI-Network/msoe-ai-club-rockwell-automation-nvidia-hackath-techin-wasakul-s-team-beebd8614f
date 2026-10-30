@@ -1,6 +1,6 @@
-pylogix>=0.8.0
 pillow>=9.0.0
 numpy>=1.21.0
 opencv-python>=4.5.0
 
 huggingface_hub>=0.23.0
+
